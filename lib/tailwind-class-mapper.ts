@@ -157,7 +157,12 @@ function formatMeasurementClass(
     return `${prefix}-[${value}px]`;
   }
 
-  // For values with other units (rem, em, %, etc.), wrap in arbitrary value
+  // For values with other units (rem, em, %, etc.) or negative prefix, wrap in arbitrary value
+  if (value.match(/^-/)) {
+    return `${prefix}-[${value}]`;
+  }
+
+  // For values starting with a digit but not caught above
   if (value.match(/^\d/)) {
     return `${prefix}-[${value}]`;
   }
