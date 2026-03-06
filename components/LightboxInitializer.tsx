@@ -13,7 +13,7 @@ import {
   Pagination,
   Keyboard,
   Thumbs,
-  FreeMode,
+
   Zoom,
   Mousewheel,
 } from 'swiper/modules';
@@ -161,11 +161,11 @@ export default function LightboxInitializer() {
 
       if (settings.thumbnails && thumbsEl) {
         swiperThumbsRef.current = new Swiper(thumbsEl as HTMLElement, {
-          modules: [FreeMode],
           spaceBetween: 10,
           slidesPerView: 'auto',
-          freeMode: true,
+          centeredSlides: true,
           watchSlidesProgress: true,
+          slideToClickedSlide: true,
         });
       }
 
@@ -197,6 +197,14 @@ export default function LightboxInitializer() {
           speed: parseFloat(settings.duration || '0.5') * 1000,
           initialSlide: initialIndex,
         });
+
+        if (swiperThumbsRef.current) {
+          const thumbsSwiper = swiperThumbsRef.current;
+          thumbsSwiper.slideTo(initialIndex, 0);
+          swiperMainRef.current.on('slideChange', (swiper) => {
+            thumbsSwiper.slideTo(swiper.realIndex);
+          });
+        }
       }
     }, 10);
 
@@ -220,7 +228,7 @@ export default function LightboxInitializer() {
     <div
       ref={modalRef}
       data-lightbox-modal
-      className={`fixed inset-0 z-9999 flex justify-center overflow-hidden overscroll-none text-sm ${isDark ? 'bg-black text-white' : 'bg-white text-black'}`}
+      className={`fixed inset-0 z-9999 flex flex-col overflow-hidden overscroll-none text-sm ${isDark ? 'bg-black text-white' : 'bg-white text-black'}`}
       style={{
         animation: 'lightbox-fade-in 250ms ease-out',
       }}
@@ -250,58 +258,62 @@ export default function LightboxInitializer() {
         [data-lightbox-modal] * { user-select: none; }
       `}</style>
 
-      {/* Close button */}
-      <button
-        onClick={handleClose}
-        className={`${btnBase} ${btnTheme} absolute right-4 top-4 z-50 gap-1.5 px-4 py-2 text-sm font-medium md:right-6 md:top-5`}
-        aria-label="Close lightbox"
-      >
-        <span>Close</span>
-        <span dangerouslySetInnerHTML={{ __html: CLOSE_SVG }} />
-      </button>
-
-      {/* Main swiper */}
-      <div className={`lightbox-swiper-main swiper relative h-full w-full overflow-hidden ${settings.thumbnails ? 'pb-28' : ''}`}>
-        <div
-          className={`swiper-wrapper flex h-full overflow-visible ${settings.easing || 'ease-in-out'}`}
+      {/* Header: pagination + close */}
+      <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-4 md:px-6 md:pt-5">
+        {showPagination && files.length > 1 ? (
+          <div
+            className={`lightbox-pagination text-sm tabular-nums ${isDark ? 'text-white' : 'text-black'}`}
+          />
+        ) : (
+          <div />
+        )}
+        <button
+          onClick={handleClose}
+          className={`${btnBase} ${btnTheme} gap-1.5 px-4 py-2 text-sm font-medium`}
+          aria-label="Close lightbox"
         >
-          {files.map((file, index) => (
-            <div
-              key={index}
-              className="swiper-slide flex shrink-0 items-center justify-center px-16 py-16 md:px-20"
-            >
-              {hasZoom ? (
-                <div className="swiper-zoom-container flex items-center justify-center">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
+          <span>Close</span>
+          <span dangerouslySetInnerHTML={{ __html: CLOSE_SVG }} />
+        </button>
+      </div>
+
+      {/* Main content: nav + swiper */}
+      <div className="relative min-h-0 flex-1">
+        <div className="lightbox-swiper-main swiper h-full w-full overflow-hidden">
+          <div
+            className={`swiper-wrapper flex h-full overflow-visible ${settings.easing || 'ease-in-out'}`}
+          >
+            {files.map((file, index) => (
+              <div
+                key={index}
+                className="swiper-slide flex shrink-0 items-center justify-center px-16 md:px-20"
+              >
+                {hasZoom ? (
+                  <div className="swiper-zoom-container flex items-center justify-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={file}
+                      alt=""
+                      className="max-h-full max-w-full rounded-lg object-contain"
+                    />
+                  </div>
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={file}
                     alt=""
                     className="max-h-full max-w-full rounded-lg object-contain"
                   />
-                </div>
-              ) : (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={file}
-                  alt=""
-                  className="max-h-full max-w-full rounded-lg object-contain"
-                />
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            ))}
+          </div>
         </div>
-
-        {/* Pagination fraction */}
-        {showPagination && files.length > 1 && (
-          <div
-            className={`lightbox-pagination fixed left-4 top-5 text-sm tabular-nums md:left-6 ${isDark ? 'text-white' : 'text-black'}`}
-          />
-        )}
 
         {/* Navigation */}
         {showNavigation && files.length > 1 && (
           <>
-            <div className={`absolute left-4 z-40 flex items-center justify-center md:left-6 ${settings.thumbnails ? 'bottom-24' : 'bottom-4'} top-auto lg:bottom-0 lg:top-0`}>
+            <div className="absolute inset-y-0 left-4 z-40 flex items-center md:left-6">
               <button
                 className={`lightbox-prev ${btnBase} ${btnTheme} p-3`}
                 aria-label="Previous image"
@@ -309,7 +321,7 @@ export default function LightboxInitializer() {
                 <span dangerouslySetInnerHTML={{ __html: PREV_SVG }} />
               </button>
             </div>
-            <div className={`absolute right-4 z-40 flex items-center justify-center md:right-6 ${settings.thumbnails ? 'bottom-24' : 'bottom-4'} top-auto lg:bottom-0 lg:top-0`}>
+            <div className="absolute inset-y-0 right-4 z-40 flex items-center md:right-6">
               <button
                 className={`lightbox-next ${btnBase} ${btnTheme} p-3`}
                 aria-label="Next image"
@@ -323,11 +335,11 @@ export default function LightboxInitializer() {
 
       {/* Thumbnails */}
       {settings.thumbnails && files.length > 1 && (
-        <div className={`lightbox-swiper-thumbs swiper absolute bottom-4 left-1/2 z-50 w-auto max-w-full -translate-x-1/2 overflow-hidden px-2 py-4 md:bottom-6`}>
+        <div className="lightbox-swiper-thumbs swiper shrink-0 overflow-hidden px-2 py-7">
           <div className="swiper-wrapper flex">
             {files.map((file, index) => (
               <div key={index} className="swiper-slide">
-                <div className="h-16 w-20 cursor-pointer overflow-hidden rounded-lg transition-all duration-200">
+                <div className="h-16 w-20 cursor-pointer overflow-hidden rounded-lg transition-all duration-200 md:h-20 md:w-24">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={file}
