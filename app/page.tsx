@@ -101,18 +101,45 @@ export default async function Home() {
   // If no published homepage exists, show default landing page
   if (!data || !data.pageLayers) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-white">
-        <div className="text-center p-8 flex flex-col items-center justify-center gap-2">
-          <h1 className="text-xl font-semibold text-neutral-900">
-            Welcome to Ycode
-          </h1>
-          <Link
-            href="/ycode"
-            className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
-          >
-            Get started
-          </Link>
+      <div className="min-h-screen bg-white">
+        <div className="flex items-center justify-center py-32">
+          <div className="text-center p-8 flex flex-col items-center justify-center gap-2">
+            <h1 className="text-xl font-semibold text-neutral-900">
+              Welcome to Ycode
+            </h1>
+            <Link
+              href="/ycode"
+              className=" bg-blue-500 text-white text-sm font-medium h-8 flex items-center justify-center px-3 rounded-lg transition-colors"
+            >
+              Get started
+            </Link>
+          </div>
         </div>
+
+        <section className="py-20 px-6 bg-neutral-50">
+          <div className="max-w-3xl mx-auto text-center">
+            <h2 className="text-2xl font-semibold text-neutral-900 mb-4">
+              About Ycode
+            </h2>
+            <p className="text-neutral-600 text-lg leading-relaxed mb-6">
+              Ycode is an open-source, self-hosted visual website builder. Design pages, manage content collections, and publish — all from an intuitive editor. No vendor lock-in, your data stays on your infrastructure.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-10">
+              <div className="p-6 bg-white rounded-xl border border-neutral-200">
+                <h3 className="font-medium text-neutral-900 mb-2">Visual Editor</h3>
+                <p className="text-sm text-neutral-500">Drag-and-drop page builder with real-time preview and responsive controls.</p>
+              </div>
+              <div className="p-6 bg-white rounded-xl border border-neutral-200">
+                <h3 className="font-medium text-neutral-900 mb-2">Self-Hosted</h3>
+                <p className="text-sm text-neutral-500">Deploy on your own Vercel + Supabase stack. Full ownership of your data.</p>
+              </div>
+              <div className="p-6 bg-white rounded-xl border border-neutral-200">
+                <h3 className="font-medium text-neutral-900 mb-2">Open Source</h3>
+                <p className="text-sm text-neutral-500">MIT licensed. Fork it, extend it, make it yours.</p>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
     );
   }

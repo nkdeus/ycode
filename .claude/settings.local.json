@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /c/dev/ycode-fork/ycode && wc -l lib/*.ts | tail -20)",
+      "Bash(cd /c/dev/ycode-fork/ycode && npx tsx -e \"\nimport { config } from 'dotenv';\nconfig\\({ path: '.env' }\\);\nimport knex from 'knex';\n\nconst db = knex\\({\n  client: 'pg',\n  connection: process.env.SUPABASE_CONNECTION_URL\n}\\);\n\nasync function main\\(\\) {\n  const rows = await db\\('page_layers'\\)\n    .where\\('page_id', 'ffcedc86-ecf9-44c4-9c02-05a0e065fcb5'\\)\n    .where\\('is_published', false\\)\n    .orderBy\\('created_at', 'desc'\\)\n    .limit\\(1\\);\n  \n  if \\(!rows.length\\) {\n    console.log\\('No draft layers found'\\);\n    await db.destroy\\(\\);\n    return;\n  }\n\n  const layers = rows[0].layers;\n  \n  function findLayer\\(layers, id\\) {\n    for \\(const l of layers\\) {\n      if \\(l.id === id\\) return l;\n      if \\(l.children\\) {\n        const found = findLayer\\(l.children, id\\);\n        if \\(found\\) return found;\n      }\n    }\n    return null;\n  }\n\n  const target = findLayer\\(layers, 'lyr-mmkit4jiln3dzz'\\);\n  if \\(target\\) {\n    console.log\\('FOUND LAYER:'\\);\n    console.log\\(JSON.stringify\\(target, null, 2\\).substring\\(0, 3000\\)\\);\n  } else {\n    console.log\\('Layer lyr-mmkit4jiln3dzz not found.'\\);\n    console.log\\('Top-level layers:'\\);\n    for \\(const l of layers\\) {\n      console.log\\(' -', l.id, '|', l.name, '|', l.customName || '\\(no name\\)'\\);\n      if \\(l.children\\) {\n        for \\(const c of l.children\\) {\n          console.log\\('   -', c.id, '|', c.name, '|', c.customName || '\\(no name\\)'\\);\n        }\n      }\n    }\n  }\n  await db.destroy\\(\\);\n}\nmain\\(\\).catch\\(e => { console.error\\(e.message\\); process.exit\\(1\\); }\\);\n\" 2>&1)",
+      "Bash(cd /c/dev/ycode-fork/ycode && node scripts/read-layer.js 2>&1)",
+      "Bash(cd /c/dev/ycode-fork/ycode && node scripts/add-nav-component.js 2>&1)",
+      "Bash(cd /c/dev/ycode-fork/ycode && node .claude/skills/ycode/scripts/ycode-db.js dump-tree ffcedc86-ecf9-44c4-9c02-05a0e065fcb5)",
+      "WebSearch",
+      "Bash(node .claude/skills/ycode/scripts/ycode-db.js dump-tree ffcedc86-ecf9-44c4-9c02-05a0e065fcb5)",
+      "Bash(node .claude/skills/ycode/scripts/add-faq.js)",
+      "Bash(node .claude/skills/ycode/scripts/add-faq.mjs)"
+    ]
+  }
+}
