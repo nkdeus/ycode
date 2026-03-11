@@ -48,11 +48,21 @@ interface ColorPickerProps {
   onImmediateChange?: (value: string) => void;
   defaultValue?: string;
   placeholder?: string;
-  solidOnly?: boolean; // Show only solid color tab (hide gradients)
+  solidOnly?: boolean;
   /** CMS color field binding (optional) */
   binding?: ColorPickerBindingProps;
   /** Called when the clear button is clicked (in addition to onChange('')) */
   onClear?: () => void;
+  /** Content for an optional "image" tab (e.g. background image controls for text layers) */
+  imageTab?: React.ReactNode;
+  /** Called when the image tab is activated */
+  onImageActivate?: () => void;
+  /** Called when switching away from the image tab; receives the solid color to restore */
+  onImageDeactivate?: (solidColor: string) => void;
+  /** Preview URL for an active background image (shown in the trigger swatch) */
+  imagePreviewUrl?: string;
+  /** Label for the active background image source (e.g. "File manager", "Custom URL") */
+  imageLabel?: string;
 }
 
 // Helper to convert hex/rgba to RgbaColor object
@@ -785,9 +795,14 @@ export default function ColorPicker({
   solidOnly = false,
   binding,
   onClear,
+  imageTab,
+  onImageActivate,
+  onImageDeactivate,
+  imagePreviewUrl,
+  imageLabel,
 }: ColorPickerProps) {
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'solid' | 'linear' | 'radial'>('solid');
+  const [activeTab, setActiveTab] = useState<'solid' | 'linear' | 'radial' | 'image'>('solid');
 
   const displayValue = value || '';
   const isGradient = displayValue.startsWith('linear') || displayValue.startsWith('radial');
@@ -1297,14 +1312,24 @@ export default function ColorPicker({
   };
 
   const handleTabChange = (value: string) => {
-    const newTab = value as 'solid' | 'linear' | 'radial';
+    const newTab = value as 'solid' | 'linear' | 'radial' | 'image';
     const previousTab = activeTab;
 
     setActiveTab(newTab);
     setSelectedStopId(null);
 
+    if (newTab === 'image') {
+      onImageActivate?.();
+      return;
+    }
+
+    if (previousTab === 'image') {
+      const solidColor = rgbaToHex(rgbaColor);
+      onImageDeactivate?.(solidColor);
+      return;
+    }
+
     if (newTab === 'solid') {
-      // Apply the current solid color when switching to solid tab
       immediateOnChange(rgbaToHex(rgbaColor));
       if (previousTab === 'linear' || previousTab === 'radial') {
         binding?.onSwitchToSolid?.();
@@ -1471,31 +1496,42 @@ export default function ColorPicker({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
-      {hasValue ? (
+      {hasValue || imagePreviewUrl ? (
         <div className="flex items-center justify-start h-8 rounded-lg bg-input hover:bg-input/60 px-2.5 cursor-pointer">
-          <div
-            className={cn('size-4 rounded shrink-0 mr-2', isTransparent && 'relative overflow-hidden')}
-            style={isTransparent ? undefined : { background: displayValue }}
-          >
-            {isTransparent && <div className="absolute inset-0 opacity-30 bg-checkerboard" />}
+          <div className={cn('size-5 rounded-[6px] shrink-0 mr-2 -ml-1 relative overflow-hidden outline dark:outline-white/10 outline-offset-[-1px]', (isTransparent || imagePreviewUrl) && 'overflow-hidden')}>
+            {imagePreviewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imagePreviewUrl}
+                className="absolute inset-0 w-full h-full object-cover z-20"
+                alt=""
+              />
+            ) : (
+              <div className="absolute inset-0 z-20" style={isTransparent ? undefined : { background: isGradient ? displayValue : `rgba(${Math.round(rgbaColor.r)},${Math.round(rgbaColor.g)},${Math.round(rgbaColor.b)},${rgbaColor.a})` }} />
+            )}
+            <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
           </div>
           <Label variant="muted" className="truncate max-w-30 cursor-pointer">
-            {getDisplayText(displayValue, rgbaColor.a)}
+            {imagePreviewUrl ? (imageLabel || 'Image') : getDisplayText(displayValue, rgbaColor.a)}
           </Label>
-          <div className="ml-auto -mr-1.5">
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={handleClear}
-            >
-              <Icon name="x" />
-            </Button>
-          </div>
+          <span
+            role="button"
+            tabIndex={0}
+            className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+            onClick={handleClear}
+          >
+            <Icon name="x" className="size-2.5" />
+          </span>
         </div>
       ) : (
-          <Button variant="input" size="sm">
-            <Icon name="plus" />
-            Add
+          <Button
+            variant="input" size="sm"
+            className="justify-start"
+          >
+            <div className="size-5 rounded-[6px] shrink-0 -ml-1 relative overflow-hidden outline outline-current/10 outline-offset-[-1px]">
+              <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
+            </div>
+            <span className="dark:opacity-50">Add...</span>
           </Button>
       )}
       </PopoverTrigger>
@@ -1527,6 +1563,11 @@ export default function ColorPicker({
               <TabsTrigger value="radial">
                 <Icon name="radial" />
               </TabsTrigger>
+              {imageTab && (
+                <TabsTrigger value="image">
+                  <Icon name="image" />
+                </TabsTrigger>
+              )}
             </TabsList>
           )}
 
@@ -1578,12 +1619,14 @@ export default function ColorPicker({
                     <Label variant="muted" className="truncate text-xs flex-1">
                       {solidBinding.fieldName || 'Color field'}
                     </Label>
-                    <Button
-                      variant="ghost" size="xs"
-                      onClick={() => binding?.onUnbind(null)} className="-mr-1.5"
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+                      onClick={() => binding?.onUnbind(null)}
                     >
-                      <Icon name="x" />
-                    </Button>
+                      <Icon name="x" className="size-2.5" />
+                    </span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -1723,12 +1766,14 @@ export default function ColorPicker({
                           <Label variant="muted" className="truncate text-xs flex-1">
                             {stopBinding.fieldName || 'Color field'}
                           </Label>
-                          <Button
-                            variant="ghost" size="xs"
-                            onClick={() => binding?.onUnbind(selectedStopId)} className="-mr-1.5"
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+                            onClick={() => binding?.onUnbind(selectedStopId)}
                           >
-                            <Icon name="x" />
-                          </Button>
+                            <Icon name="x" className="size-2.5" />
+                          </span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
@@ -1857,12 +1902,14 @@ export default function ColorPicker({
                           <Label variant="muted" className="truncate text-xs flex-1">
                             {stopBinding.fieldName || 'Color field'}
                           </Label>
-                          <Button
-                            variant="ghost" size="xs"
-                            onClick={() => binding?.onUnbind(selectedStopId)} className="-mr-1.5"
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+                            onClick={() => binding?.onUnbind(selectedStopId)}
                           >
-                            <Icon name="x" />
-                          </Button>
+                            <Icon name="x" className="size-2.5" />
+                          </span>
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
@@ -1920,6 +1967,15 @@ export default function ColorPicker({
               })()}
             </div>
           </TabsContent>
+
+          {imageTab && (
+            <TabsContent
+              value="image" className="gap-3"
+              forceMount
+            >
+              {imageTab}
+            </TabsContent>
+          )}
 
         </Tabs>
       </PopoverContent>

@@ -51,7 +51,6 @@ import { CollaboratorBadge } from '@/components/collaboration/CollaboratorBadge'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import type { CollectionItemWithValues, CollectionField, Collection, CollectionFieldData } from '@/types';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Switch } from '@/components/ui/switch';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -1524,7 +1523,7 @@ const CMS = React.memo(function CMS() {
                       </th>
                     );
                   })}
-                  <th className="px-4 py-3 text-left font-medium text-sm w-24 sticky top-0 z-10 bg-background border-b border-border">
+                  <th className="px-4 py-3 text-left font-medium text-sm w-24 sticky right-0 top-0 z-20 bg-background border-b border-border">
                     <Button
                       size="sm"
                       variant="ghost"
@@ -1867,9 +1866,8 @@ const CMS = React.memo(function CMS() {
                             onClick={() => !isManualMode && handleEditItem(item)}
                           >
                             <div className="pointer-events-none">
-                              <Switch
+                              <Checkbox
                                 checked={isTrue}
-                                size="sm"
                                 tabIndex={-1}
                                 aria-hidden="true"
                               />

@@ -56,6 +56,11 @@ function removeVarEntry(vars: Record<string, string> | undefined, key: string): 
 /** Background image design properties that accompany the image URL */
 const BG_IMAGE_PROPS = ['backgroundImage', 'backgroundSize', 'backgroundPosition', 'backgroundRepeat'] as const;
 
+const isTextLayer = (layer: Layer | null): boolean => {
+  if (!layer) return false;
+  return layer.name === 'text';
+};
+
 export default function BackgroundsControls({ layer, onLayerUpdate, activeTextStyleKey, fieldGroups, allFields, collections }: BackgroundsControlsProps) {
   const { activeBreakpoint, activeUIState } = useEditorStore();
   const openFileManager = useEditorStore((state) => state.openFileManager);
@@ -157,6 +162,13 @@ export default function BackgroundsControls({ layer, onLayerUpdate, activeTextSt
       // Keep background-image var class if gradient still exists for this breakpoint/state
       if (prop === 'backgroundImage' && !includeColor && cleanedBg.bgGradientVars?.[varName]) continue;
       classes = setBreakpointClass(classes, prop, null, activeBreakpoint, activeUIState);
+    }
+
+    // For text layers, also remove bg-clip-text + text-transparent
+    if (isTextLayer(layer)) {
+      delete cleanedBg.backgroundClip;
+      classes = setBreakpointClass(classes, 'backgroundClip', null, activeBreakpoint, activeUIState);
+      classes = setBreakpointClass(classes, 'color', null, activeBreakpoint, activeUIState);
     }
 
     // Build variable updates — always remove backgroundImage variable
@@ -358,6 +370,14 @@ export default function BackgroundsControls({ layer, onLayerUpdate, activeTextSt
     }
     classes = setBreakpointClass(classes, 'backgroundImage', buildBgImgClass(varName), activeBreakpoint, activeUIState);
 
+    // For text layers, auto-enable bg-clip-text so the image shows through the text
+    if (isTextLayer(layer)) {
+      bgDesign.backgroundClip = 'text';
+      const clipCls = propertyToClass('backgrounds', 'backgroundClip', 'text');
+      if (clipCls) classes = setBreakpointClass(classes, 'backgroundClip', clipCls, activeBreakpoint, activeUIState);
+      classes = setBreakpointClass(classes, 'color', 'text-transparent', activeBreakpoint, activeUIState);
+    }
+
     onLayerUpdate(layer.id, buildStyledUpdate(layer, {
       design: { ...layer.design, backgrounds: bgDesign },
       classes: classes.join(' '),
@@ -462,7 +482,7 @@ export default function BackgroundsControls({ layer, onLayerUpdate, activeTextSt
       collections={collections || []}
       value={bgImageVariable?.type === 'field' ? (bgImageVariable as FieldVariable).data.field_id : null}
       onSelect={handleFieldSelect}
-      placeholder="Select a field"
+      placeholder="Select..."
       allowedFieldTypes={IMAGE_FIELD_TYPES}
     />
   ), [imageFieldGroups, allFields, collections, bgImageVariable, handleFieldSelect]);
@@ -506,21 +526,21 @@ export default function BackgroundsControls({ layer, onLayerUpdate, activeTextSt
           renderFieldSelector={renderFieldSelector}
         />
 
-        <div className="grid grid-cols-3 items-center">
-          <Label variant="muted">Clip text</Label>
-          <div className="col-span-2">
-            <Tabs
-              value={backgroundClip === 'text' ? 'yes' : 'no'}
-              onValueChange={(v) => handleBackgroundClipToggle(v === 'yes')}
-              className="w-full"
-            >
-              <TabsList className="w-full">
-                <TabsTrigger value="no">No</TabsTrigger>
-                <TabsTrigger value="yes">Yes</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-        </div>
+        {/*<div className="grid grid-cols-3 items-center">*/}
+        {/*  <Label variant="muted">Clip text</Label>*/}
+        {/*  <div className="col-span-2">*/}
+        {/*    <Tabs*/}
+        {/*      value={backgroundClip === 'text' ? 'yes' : 'no'}*/}
+        {/*      onValueChange={(v) => handleBackgroundClipToggle(v === 'yes')}*/}
+        {/*      className="w-full"*/}
+        {/*    >*/}
+        {/*      <TabsList className="w-full">*/}
+        {/*        <TabsTrigger value="no">No</TabsTrigger>*/}
+        {/*        <TabsTrigger value="yes">Yes</TabsTrigger>*/}
+        {/*      </TabsList>*/}
+        {/*    </Tabs>*/}
+        {/*  </div>*/}
+        {/*</div>*/}
       </div>
     </div>
   );

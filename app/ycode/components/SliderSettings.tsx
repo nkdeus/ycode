@@ -11,7 +11,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import Icon from '@/components/ui/icon';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import {
@@ -31,7 +31,7 @@ import { slidePrev, slideNext } from '@/hooks/use-canvas-slider';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 
-import type { Layer, SliderSettings as SliderSettingsType, SliderAnimationEffect, SliderLoopMode, SliderPaginationType } from '@/types';
+import type { Layer, SliderSettings as SliderSettingsType, SwiperAnimationEffect, SliderLoopMode, SliderPaginationType } from '@/types';
 
 interface SliderSettingsProps {
   layer: Layer | null;
@@ -39,13 +39,13 @@ interface SliderSettingsProps {
   allLayers: Layer[];
 }
 
-const ANIMATION_EFFECTS: { label: string; value: SliderAnimationEffect }[] = [
-  { label: 'Slide', value: 'Slide' },
-  { label: 'Fade', value: 'Fade' },
-  { label: 'Cube', value: 'Cube' },
-  { label: 'Flip', value: 'Flip' },
-  { label: 'Coverflow', value: 'Coverflow' },
-  { label: 'Cards', value: 'Cards' },
+const ANIMATION_EFFECTS: { label: string; value: SwiperAnimationEffect }[] = [
+  { label: 'Slide', value: 'slide' },
+  { label: 'Fade', value: 'fade' },
+  { label: 'Cube', value: 'cube' },
+  { label: 'Flip', value: 'flip' },
+  { label: 'Coverflow', value: 'coverflow' },
+  { label: 'Cards', value: 'cards' },
 ];
 
 const EASING_OPTIONS: { label: string; value: string; icon: 'ease-linear' | 'ease-in' | 'ease-in-out' | 'ease-out' }[] = [
@@ -160,7 +160,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
             <Select
               value={settings.animationEffect}
               onValueChange={(v) => {
-                const effect = v as SliderAnimationEffect;
+                const effect = v as SwiperAnimationEffect;
                 if (!EFFECTS_WITH_PER_VIEW.has(effect)) {
                   updateSettings({ animationEffect: effect, groupSlide: 1, slidesPerGroup: 1 });
                 } else {
@@ -427,9 +427,9 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
         {/* Behavior toggles */}
         <div className="grid grid-cols-3 items-start gap-2">
           <Label variant="muted">Behavior</Label>
-          <div className="col-span-2 flex flex-col gap-3">
+          <div className="col-span-2 flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <Switch
+              <Checkbox
                 id="slider-navigation"
                 checked={settings.navigation}
                 onCheckedChange={(checked) => updateSetting('navigation', checked)}
@@ -444,7 +444,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
             </div>
             {settings.autoplay && (
               <div className="flex items-center gap-2">
-                <Switch
+                <Checkbox
                   id="slider-pause-hover"
                   checked={settings.pauseOnHover}
                   onCheckedChange={(checked) => updateSetting('pauseOnHover', checked)}
@@ -460,7 +460,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
             )}
             {EFFECTS_WITH_PER_VIEW.has(settings.animationEffect) && settings.groupSlide > 1 && (
               <div className="flex items-center gap-2">
-                <Switch
+                <Checkbox
                   id="slider-centered"
                   checked={settings.centered}
                   onCheckedChange={(checked) => updateSetting('centered', checked)}
@@ -475,7 +475,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Switch
+              <Checkbox
                 id="slider-touch"
                 checked={settings.touchEvents}
                 onCheckedChange={(checked) => {
@@ -494,7 +494,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
             </div>
             {settings.touchEvents && (
               <div className="flex items-center gap-2">
-                <Switch
+                <Checkbox
                   id="slider-slide-to-clicked"
                   checked={settings.slideToClicked}
                   onCheckedChange={(checked) => updateSetting('slideToClicked', checked)}
@@ -509,7 +509,7 @@ export default function SliderSettings({ layer, onLayerUpdate, allLayers }: Slid
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Switch
+              <Checkbox
                 id="slider-mousewheel"
                 checked={settings.mousewheel}
                 onCheckedChange={(checked) => updateSetting('mousewheel', checked)}

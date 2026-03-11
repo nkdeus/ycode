@@ -48,6 +48,7 @@ import FilterSettings from './FilterSettings';
 import AlertSettings from './AlertSettings';
 import HTMLEmbedSettings from './HTMLEmbedSettings';
 import SliderSettings from './SliderSettings';
+import LightboxSettings from './LightboxSettings';
 import InputSettings from './InputSettings';
 import SelectOptionsSettings from './SelectOptionsSettings';
 import LabelSettings from './LabelSettings';
@@ -90,6 +91,7 @@ import { createTextComponentVariableValue } from '@/lib/variable-utils';
 import { getRichTextValue } from '@/lib/tiptap-utils';
 import { DEFAULT_TEXT_STYLES, getTextStyle } from '@/lib/text-format-utils';
 import { buildFieldGroupsForLayer, getFieldIcon, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
+import { getInverseReferenceFields } from '@/lib/collection-utils';
 
 // 7. Types
 import type { Layer, FieldVariable, CollectionField, CollectionVariable, ComponentVariable } from '@/types';
@@ -153,12 +155,9 @@ const RightSidebar = React.memo(function RightSidebar({
   }, [urlState.rightTab, activeTab]);
 
   const [currentClassInput, setCurrentClassInput] = useState<string>('');
-  const [attributesOpen, setAttributesOpen] = useState(true);
   const [customId, setCustomId] = useState<string>('');
-  const [isHidden, setIsHidden] = useState<boolean>(false);
   const [containerTag, setContainerTag] = useState<string>('div');
   const [textTag, setTextTag] = useState<string>('p');
-  const [customAttributesOpen, setCustomAttributesOpen] = useState(false);
   const [showAddAttributePopover, setShowAddAttributePopover] = useState(false);
   const [newAttributeName, setNewAttributeName] = useState('');
   const [newAttributeValue, setNewAttributeValue] = useState('');
@@ -246,6 +245,9 @@ const RightSidebar = React.memo(function RightSidebar({
   const selectedLayerRef = useRef(selectedLayer);
   selectedLayerRef.current = selectedLayer;
 
+  const hasCustomAttributes = !!(selectedLayer?.settings?.customAttributes &&
+    Object.keys(selectedLayer.settings.customAttributes).length > 0);
+
   // Get the layer whose interactions we're editing (different from selected layer during target selection)
   const interactionOwnerLayer: Layer | null = useMemo(() => {
     return findLayerById(interactionOwnerLayerId);
@@ -279,6 +281,7 @@ const RightSidebar = React.memo(function RightSidebar({
     let current = findLayerWithParent(allLayers, selectedLayerId)?.parent ?? null;
     while (current) {
       if (current.name === 'button') return true;
+      if (current.name === 'lightbox') return true;
       if (current.name === 'form' && selectedLayer.name === 'button') return true;
       const parentResult = findLayerWithParent(allLayers, current.id);
       current = parentResult?.parent ?? null;
@@ -486,7 +489,8 @@ const RightSidebar = React.memo(function RightSidebar({
         return isTextLayer(layer) || isButtonLayer(layer) || isIconLayer(layer) || isFormInputLayer(layer) || layer.id === 'body' || layer.name === 'slideFraction';
 
       case 'backgrounds':
-        // Background controls: show for all elements (text layers need it for clip-text effects)
+        // Background controls: hide for text layers (image is in the color picker's image tab)
+        if (isTextLayer(layer)) return false;
         if (showTextStyleControls) return true;
         return true;
 
@@ -678,7 +682,6 @@ const RightSidebar = React.memo(function RightSidebar({
   if (selectedLayerId !== prevSelectedLayerId) {
     setPrevSelectedLayerId(selectedLayerId);
     setCustomId(sanitizeHtmlId(selectedLayer?.settings?.id || selectedLayer?.attributes?.id || ''));
-    setIsHidden(selectedLayer?.settings?.hidden || false);
     setContainerTag(selectedLayer?.settings?.tag || getDefaultContainerTag(selectedLayer));
     setTextTag(selectedLayer?.settings?.tag || getDefaultTextTag(selectedLayer));
   }
@@ -787,17 +790,6 @@ const RightSidebar = React.memo(function RightSidebar({
       const currentSettings = selectedLayer?.settings || {};
       handleLayerUpdate(selectedLayerId, {
         settings: { ...currentSettings, id: sanitizedId }
-      });
-    }
-  };
-
-  // Handle visibility toggle
-  const handleVisibilityChange = (hidden: boolean) => {
-    setIsHidden(hidden);
-    if (selectedLayerId) {
-      const currentSettings = selectedLayer?.settings || {};
-      handleLayerUpdate(selectedLayerId, {
-        settings: { ...currentSettings, hidden }
       });
     }
   };
@@ -918,14 +910,14 @@ const RightSidebar = React.memo(function RightSidebar({
     });
   }, [selectedLayerId, selectedLayer, handleLayerUpdate]);
 
-  // Handle reference field selection (for reference, multi-reference, or multi-asset as collection source)
+  // Handle reference field selection (for reference, multi-reference, inverse, or multi-asset as collection source)
   // Also resets child bindings when source changes
-  const handleReferenceFieldChange = (fieldId: string) => {
+  const handleReferenceFieldChange = (value: string) => {
     if (!selectedLayerId || !selectedLayer) return;
 
     const currentCollectionVariable = getCollectionVariable(selectedLayer);
 
-    if (fieldId === 'none') {
+    if (value === 'none') {
       // Clear the collection source
       handleLayerUpdate(selectedLayerId, {
         variables: {
@@ -933,9 +925,24 @@ const RightSidebar = React.memo(function RightSidebar({
           collection: { id: '', source_field_id: undefined, source_field_type: undefined, source_field_source: undefined }
         }
       });
+    } else if (value.startsWith('inverse:')) {
+      // Inverse reference: "inverse:{fieldId}:{collectionId}"
+      const [, fieldId, collectionId] = value.split(':');
+      handleLayerUpdate(selectedLayerId, {
+        variables: {
+          ...selectedLayer?.variables,
+          collection: {
+            ...currentCollectionVariable,
+            id: collectionId,
+            source_field_id: fieldId,
+            source_field_type: 'inverse_reference',
+            source_field_source: undefined,
+          }
+        }
+      });
     } else {
       // Find the selected field to get its reference_collection_id and type
-      const selectedField = parentCollectionFields.find(f => f.id === fieldId);
+      const selectedField = parentCollectionFields.find(f => f.id === value);
 
       if (selectedField && isMultipleAssetField(selectedField)) {
         handleLayerUpdate(selectedLayerId, {
@@ -944,7 +951,7 @@ const RightSidebar = React.memo(function RightSidebar({
             collection: {
               ...currentCollectionVariable,
               id: MULTI_ASSET_COLLECTION_ID,
-              source_field_id: fieldId,
+              source_field_id: value,
               source_field_type: 'multi_asset',
               source_field_source: 'collection',
             }
@@ -957,7 +964,7 @@ const RightSidebar = React.memo(function RightSidebar({
             collection: {
               ...currentCollectionVariable,
               id: selectedField.reference_collection_id,
-              source_field_id: fieldId,
+              source_field_id: value,
               source_field_type: selectedField.type as 'reference' | 'multi_reference',
               source_field_source: undefined,
             }
@@ -1023,6 +1030,16 @@ const RightSidebar = React.memo(function RightSidebar({
           source_field_source: undefined,
         };
       }
+    } else if (value.startsWith('inverse:')) {
+      // Inverse reference: "inverse:{fieldId}:{collectionId}"
+      const [, fieldId, collectionId] = value.split(':');
+      newCollectionVar = {
+        ...currentCollectionVariable,
+        id: collectionId,
+        source_field_id: fieldId,
+        source_field_type: 'inverse_reference',
+        source_field_source: undefined,
+      };
     } else if (value.startsWith('collection:')) {
       const collectionId = value.replace('collection:', '');
       newCollectionVar = {
@@ -1076,6 +1093,9 @@ const RightSidebar = React.memo(function RightSidebar({
     if (collectionVariable.source_field_id) {
       if (collectionVariable.source_field_type === 'multi_asset') {
         return `multi_asset:${collectionVariable.source_field_id}`;
+      }
+      if (collectionVariable.source_field_type === 'inverse_reference') {
+        return `inverse:${collectionVariable.source_field_id}:${collectionVariable.id}`;
       }
       return `field:${collectionVariable.source_field_id}`;
     }
@@ -1630,6 +1650,28 @@ const RightSidebar = React.memo(function RightSidebar({
     return collectionFields.filter(f => isMultipleAssetField(f));
   }, [currentPage, fields]);
 
+  // Inverse reference fields: fields in OTHER collections that reference the parent collection
+  // E.g., if parent is "Authors" and "Books" has a reference field "author" → Authors,
+  // show "Books (via author)" as a connected relation source option
+  const parentInverseReferenceFields = useMemo(() => {
+    const collectionVariable = parentCollectionLayer ? getCollectionVariable(parentCollectionLayer) : null;
+    let collectionId = collectionVariable?.id;
+    if (collectionId === MULTI_ASSET_COLLECTION_ID) collectionId = undefined;
+    if (!collectionId && currentPage?.is_dynamic) {
+      collectionId = currentPage.settings?.cms?.collection_id || undefined;
+    }
+    if (!collectionId) return [];
+    return getInverseReferenceFields(collectionId, fields, collections);
+  }, [parentCollectionLayer, fields, collections, currentPage]);
+
+  // Inverse reference fields for dynamic page context (top-level collection layers on dynamic pages)
+  const dynamicPageInverseReferenceFields = useMemo(() => {
+    if (!currentPage?.is_dynamic) return [];
+    const collectionId = currentPage.settings?.cms?.collection_id;
+    if (!collectionId) return [];
+    return getInverseReferenceFields(collectionId, fields, collections);
+  }, [currentPage, fields, collections]);
+
   // Handle adding custom attribute
   const handleAddAttribute = () => {
     if (selectedLayerId && newAttributeName.trim()) {
@@ -1860,12 +1902,9 @@ const RightSidebar = React.memo(function RightSidebar({
 
         <TabsContent value="settings" className="flex-1 overflow-y-auto no-scrollbar mt-0 data-[state=inactive]:hidden">
           <div className="flex flex-col divide-y">
-            {/* Attributes Panel */}
-            <SettingsPanel
-              title="Attributes"
-              isOpen={attributesOpen}
-              onToggle={() => setAttributesOpen(!attributesOpen)}
-            >
+            {selectedLayerId !== 'body' && (<>
+            {/* Attributes */}
+            <div className="flex flex-col gap-2 pb-5 pt-5">
               <div className="grid grid-cols-3">
                 <Label variant="muted">ID</Label>
                 <div className="col-span-2 *:w-full">
@@ -1873,28 +1912,11 @@ const RightSidebar = React.memo(function RightSidebar({
                     type="text"
                     value={customId}
                     onChange={(e) => handleIdChange(e.target.value)}
-                    placeholder="Identifier"
+                    placeholder="For in-page linking"
                     disabled={isLockedByOther}
                   />
                 </div>
               </div>
-
-              {/* Element visibility toggle - hide for alert layers (they have built-in show/hide logic) */}
-              {!isAlertLayer(selectedLayer) && (
-                <div className="grid grid-cols-3">
-                  <Label variant="muted">Element</Label>
-                  <div className="col-span-2 *:w-full">
-                    <ToggleGroup
-                      options={[
-                        { label: 'Shown', value: false },
-                        { label: 'Hidden', value: true },
-                      ]}
-                      value={isHidden}
-                      onChange={(value) => handleVisibilityChange(value as boolean)}
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* Container Tag Selector - Only for containers/sections/blocks, hide for alerts */}
               {isContainerLayer(selectedLayer) && !isHeadingLayer(selectedLayer) && !isAlertLayer(selectedLayer) && (
@@ -1934,7 +1956,7 @@ const RightSidebar = React.memo(function RightSidebar({
                   <div className="col-span-2 *:w-full">
                     <Select value={textTag} onValueChange={handleTextTagChange}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select tag">
+                        <SelectValue placeholder="Select...">
                           {textTag && (() => {
                             const option = textTagOptions.find(opt => opt.value === textTag);
                             return option ? option.label : textTag;
@@ -1957,7 +1979,7 @@ const RightSidebar = React.memo(function RightSidebar({
                   </div>
                 </div>
               )}
-            </SettingsPanel>
+            </div>
 
             {/* Content Panel - show for text-editable layers */}
             {selectedLayer && isTextEditable(selectedLayer) && (() => {
@@ -2075,7 +2097,7 @@ const RightSidebar = React.memo(function RightSidebar({
             })()}
 
             {/* Link Settings - hide for form-related layers, buttons inside forms, and layers inside buttons */}
-            {selectedLayer && !['form', 'select', 'input', 'textarea', 'checkbox', 'radio', 'label'].includes(selectedLayer.name) && selectedLayer.settings?.tag !== 'label' && !shouldHideLinkSettings && (
+            {selectedLayer && !['form', 'select', 'input', 'textarea', 'checkbox', 'radio', 'label', 'lightbox', 'hr'].includes(selectedLayer.name) && selectedLayer.settings?.tag !== 'label' && !shouldHideLinkSettings && (
               <LinkSettings
                 layer={selectedLayer}
                 onLayerUpdate={handleLayerUpdate}
@@ -2156,24 +2178,27 @@ const RightSidebar = React.memo(function RightSidebar({
                   <div className="grid grid-cols-3">
                     <Label variant="muted">Source</Label>
                     <div className="col-span-2 *:w-full">
-                      {/* When inside a parent collection, show reference fields and multi-asset fields as source options */}
+                      {/* When inside a parent collection, show reference fields, multi-asset fields, and inverse reference fields as source options */}
                       {parentCollectionLayer ? (
                         <Select
-                          value={getCollectionVariable(selectedLayer)?.source_field_id || 'none'}
+                          value={(() => {
+                            const cv = getCollectionVariable(selectedLayer);
+                            if (!cv?.source_field_id) return '';
+                            if (cv.source_field_type === 'inverse_reference') {
+                              return `inverse:${cv.source_field_id}:${cv.id}`;
+                            }
+                            return cv.source_field_id;
+                          })()}
                           onValueChange={handleReferenceFieldChange}
                         >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select source" />
+                          <SelectTrigger
+                            onClear={getCollectionVariable(selectedLayer)?.source_field_id
+                              ? () => handleReferenceFieldChange('none')
+                              : undefined}
+                          >
+                            <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="none">
-                                <span className="flex items-center gap-2">
-                                  <Icon name="none" className="size-3 text-muted-foreground shrink-0" />
-                                  No source
-                                </span>
-                              </SelectItem>
-                            </SelectGroup>
                             {parentReferenceFields.length > 0 && (
                               <SelectGroup>
                                 <SelectLabel>Reference fields</SelectLabel>
@@ -2200,26 +2225,38 @@ const RightSidebar = React.memo(function RightSidebar({
                                 ))}
                               </SelectGroup>
                             )}
+                            {parentInverseReferenceFields.length > 0 && (
+                              <SelectGroup>
+                                <SelectLabel>Connected relations</SelectLabel>
+                                {parentInverseReferenceFields.map(({ field, collection }) => (
+                                  <SelectItem
+                                    key={`inverse-${field.id}`}
+                                    value={`inverse:${field.id}:${field.collection_id}`}
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      <Icon name="database" className="size-3 text-muted-foreground shrink-0" />
+                                      {collection.name} (via {field.name})
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            )}
                           </SelectContent>
                         </Select>
                       ) : currentPage?.is_dynamic ? (
                         /* On dynamic pages, show CMS page data fields + all collections */
                         <Select
-                          value={getDynamicPageSourceValue}
+                          value={getDynamicPageSourceValue === 'none' ? '' : getDynamicPageSourceValue}
                           onValueChange={handleDynamicPageSourceChange}
                         >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select source" />
+                          <SelectTrigger
+                            onClear={getDynamicPageSourceValue !== 'none'
+                              ? () => handleDynamicPageSourceChange('none')
+                              : undefined}
+                          >
+                            <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="none">
-                                <span className="flex items-center gap-2">
-                                  <Icon name="none" className="size-3 text-muted-foreground shrink-0" />
-                                  No source
-                                </span>
-                              </SelectItem>
-                            </SelectGroup>
                             {dynamicPageReferenceFields.length > 0 && (
                               <SelectGroup>
                                 <SelectLabel>Reference fields</SelectLabel>
@@ -2241,6 +2278,22 @@ const RightSidebar = React.memo(function RightSidebar({
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
                                       {field.name}
+                                    </span>
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            )}
+                            {dynamicPageInverseReferenceFields.length > 0 && (
+                              <SelectGroup>
+                                <SelectLabel>Connected relations</SelectLabel>
+                                {dynamicPageInverseReferenceFields.map(({ field, collection }) => (
+                                  <SelectItem
+                                    key={`inverse-${field.id}`}
+                                    value={`inverse:${field.id}:${field.collection_id}`}
+                                  >
+                                    <span className="flex items-center gap-2">
+                                      <Icon name="database" className="size-3 text-muted-foreground shrink-0" />
+                                      {collection.name} (via {field.name})
                                     </span>
                                   </SelectItem>
                                 ))}
@@ -2268,21 +2321,17 @@ const RightSidebar = React.memo(function RightSidebar({
                       ) : (
                         /* When not inside a parent collection and not dynamic, show collections as source options */
                         <Select
-                          value={getCollectionVariable(selectedLayer)?.id || 'none'}
+                          value={getCollectionVariable(selectedLayer)?.id || ''}
                           onValueChange={handleCollectionChange}
                         >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select a collection" />
+                          <SelectTrigger
+                            onClear={getCollectionVariable(selectedLayer)?.id
+                              ? () => handleCollectionChange('none')
+                              : undefined}
+                          >
+                            <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectGroup>
-                              <SelectItem value="none">
-                                <span className="flex items-center gap-2">
-                                  <Icon name="none" className="size-3 text-muted-foreground shrink-0" />
-                                  No source
-                                </span>
-                              </SelectItem>
-                            </SelectGroup>
                             <SelectGroup>
                               <SelectLabel>Collections</SelectLabel>
                               {collections.length > 0 ? (
@@ -2336,7 +2385,7 @@ const RightSidebar = React.memo(function RightSidebar({
                               onValueChange={handleSortBySelectValue}
                             >
                               <SelectTrigger ref={sortByTriggerRef}>
-                                <SelectValue placeholder="Select sorting" />
+                                <SelectValue placeholder="Select..." />
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectGroup>
@@ -2566,6 +2615,14 @@ const RightSidebar = React.memo(function RightSidebar({
               allLayers={allLayers}
             />
 
+            <LightboxSettings
+              layer={selectedLayer}
+              onLayerUpdate={handleLayerUpdate}
+              fieldGroups={fieldGroups}
+              allFields={fields}
+              collections={collections}
+            />
+
             <LabelSettings
               layer={selectedLayer}
               allLayers={allLayers}
@@ -2596,18 +2653,18 @@ const RightSidebar = React.memo(function RightSidebar({
               onLayerUpdate={handleLayerUpdate}
               fieldGroups={fieldGroups}
             />
+            </>)}
 
             {/* Custom Attributes Panel */}
             <SettingsPanel
               title="Custom attributes"
-              collapsible
-              isOpen={customAttributesOpen}
-              onToggle={() => setCustomAttributesOpen(!customAttributesOpen)}
+              isOpen={hasCustomAttributes}
+              onToggle={() => {}}
               action={
                 <Popover open={showAddAttributePopover} onOpenChange={setShowAddAttributePopover}>
                   <PopoverTrigger asChild>
                     <Button
-                      variant="secondary"
+                      variant="ghost"
                       size="xs"
                     >
                       <Icon name="plus" />
@@ -2661,8 +2718,7 @@ const RightSidebar = React.memo(function RightSidebar({
                 </Popover>
               }
             >
-              {selectedLayer?.settings?.customAttributes &&
-               Object.keys(selectedLayer.settings.customAttributes).length > 0 ? (
+              {selectedLayer?.settings?.customAttributes && (
                 <div className="flex flex-col gap-1">
                   {Object.entries(selectedLayer.settings.customAttributes).map(([name, value]) => (
                     <div
@@ -2670,21 +2726,18 @@ const RightSidebar = React.memo(function RightSidebar({
                       className="flex items-center justify-between pl-3 pr-1 h-8 bg-muted text-muted-foreground rounded-lg"
                     >
                       <span>{name}=&quot;{value as string}&quot;</span>
-                      <Button
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
                         onClick={() => handleRemoveAttribute(name)}
-                        variant="ghost"
-                        size="xs"
                       >
-                        <Icon name="x" />
-                      </Button>
+                        <Icon name="x" className="size-2.5" />
+                      </span>
                     </div>
                   ))}
                 </div>
-                ) : (
-                <Empty>
-                  <EmptyDescription>HTML attributes can be used to append additional information to your elements.</EmptyDescription>
-                </Empty>
-                )}
+              )}
             </SettingsPanel>
           </div>
         </TabsContent>

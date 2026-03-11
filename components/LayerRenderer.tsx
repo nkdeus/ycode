@@ -1099,6 +1099,19 @@ const LayerItem: React.FC<{
           values: virtualValues,
         };
       });
+    } else if (sourceFieldType === 'inverse_reference' && sourceFieldId) {
+      // Inverse reference: filter items whose reference field value matches the parent item ID
+      const parentId = collectionLayerItemId || pageCollectionItemId;
+      if (!parentId) return [];
+      items = allCollectionItems.filter(item => {
+        const fieldValue = item.values[sourceFieldId];
+        if (!fieldValue) return false;
+        // Single reference: exact match
+        if (fieldValue === parentId) return true;
+        // Multi-reference: check if JSON array contains the parent ID
+        const ids = parseMultiReferenceValue(fieldValue);
+        return ids.includes(parentId);
+      });
     } else if (!sourceFieldId) {
       items = allCollectionItems;
     } else {
@@ -1146,7 +1159,7 @@ const LayerItem: React.FC<{
     }
 
     return items;
-  }, [allCollectionItems, sourceFieldId, sourceFieldType, sourceFieldSource, collectionLayerData, pageCollectionItemData, getAsset, collectionVariable?.filters]);
+  }, [allCollectionItems, sourceFieldId, sourceFieldType, sourceFieldSource, collectionLayerData, pageCollectionItemData, collectionLayerItemId, pageCollectionItemId, getAsset, collectionVariable?.filters]);
 
   useEffect(() => {
     if (!isEditMode) return;
@@ -1589,6 +1602,26 @@ const LayerItem: React.FC<{
       }
       if (SWIPER_DATA_ATTR_MAP[layer.name]) {
         elementProps[SWIPER_DATA_ATTR_MAP[layer.name]] = '';
+      }
+
+      // Lightbox data attributes (LightboxInitializer)
+      if (layer.name === 'lightbox' && layer.settings?.lightbox) {
+        const lbSettings = layer.settings.lightbox;
+        elementProps['data-lightbox-id'] = lbSettings.groupId || layer.id;
+        const { filesField: _ff, filesSource: _fs, ...runtimeSettings } = lbSettings;
+        elementProps['data-lightbox-settings'] = JSON.stringify(runtimeSettings);
+        const resolvedFiles = lbSettings.files
+          .map((fileId: string) => {
+            if (fileId.startsWith('http') || fileId.startsWith('/')) return fileId;
+            return getAsset(fileId)?.public_url ?? null;
+          })
+          .filter(Boolean) as string[];
+        if (resolvedFiles.length) {
+          elementProps['data-lightbox-files'] = resolvedFiles.join(',');
+        }
+        if (lbSettings.groupId && resolvedFiles.length > 0) {
+          elementProps['data-lightbox-open-to'] = resolvedFiles[0];
+        }
       }
     }
 

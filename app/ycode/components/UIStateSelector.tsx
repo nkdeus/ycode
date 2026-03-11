@@ -32,7 +32,7 @@ export default function UIStateSelector({ selectedLayer }: UIStateSelectorProps)
   const selectableStyles = Object.entries(allTextStyles).filter(([key]) => !key.startsWith('dts-'));
 
   return (
-    <div className="sticky -top-2 bg-background z-10 py-4 flex flex-row gap-2">
+    <div className="sticky -top-2 bg-background z-30 py-4 flex flex-row gap-2">
       {/* Text Style Selector - show for text layers with textStyles, placed first */}
       {isTextLayer && (
         <Select
@@ -40,7 +40,7 @@ export default function UIStateSelector({ selectedLayer }: UIStateSelectorProps)
           onValueChange={(value) => setActiveTextStyleKey(value === 'default' ? null : value)}
         >
           <SelectTrigger className="w-1/2">
-            <SelectValue placeholder="Select style" />
+            <SelectValue placeholder="Select..." />
           </SelectTrigger>
           <SelectContent align="start">
             <SelectGroup>
@@ -67,7 +67,7 @@ export default function UIStateSelector({ selectedLayer }: UIStateSelectorProps)
 
       <Select value={activeUIState} onValueChange={(value) => setActiveUIState(value as UIState)}>
         <SelectTrigger className={isTextLayer ? 'w-1/2' : 'w-full'}>
-          <SelectValue placeholder="Select state" />
+          <SelectValue placeholder="Select..." />
         </SelectTrigger>
         <SelectContent align="end">
           <SelectGroup>

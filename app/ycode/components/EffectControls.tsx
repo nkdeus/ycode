@@ -433,7 +433,15 @@ export default function EffectControls({ layer, onLayerUpdate, activeTextStyleKe
 
                   <Popover open={popoverOpen} onOpenChange={handleOpenPopover}>
                     <PopoverTrigger asChild>
-                      <Button variant="secondary" size="sm">Add</Button>
+                      <Button
+                        variant="input" size="sm"
+                        className="justify-start"
+                      >
+                        <div className="size-5 rounded-[6px] shrink-0 -ml-1 relative overflow-hidden outline outline-current/10 outline-offset-[-1px]">
+                          <div className="absolute inset-0 opacity-15 bg-checkerboard bg-background z-10" />
+                        </div>
+                        <span className="dark:opacity-50">Add...</span>
+                      </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-56 my-0.5 flex flex-col gap-2" align="end">
                       {editingShadow && (
@@ -565,23 +573,30 @@ export default function EffectControls({ layer, onLayerUpdate, activeTextStyleKe
                   </Popover>
 
                   {shadows.map((shadow) => (
-                    <div
+                    <Button
                       key={shadow.id}
-                      className="bg-secondary/50 rounded-lg flex justify-between items-center p-2 cursor-pointer hover:bg-secondary/70 transition-colors"
+                      variant="input"
                       onClick={() => handleEditShadow(shadow.id)}
                     >
                       <Label variant="muted" className="cursor-pointer">{getShadowDisplayName(shadow)}</Label>
-                      <Button
-                        variant="outline"
-                        className="!size-4 !p-0"
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleRemoveShadow(shadow.id);
                         }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            handleRemoveShadow(shadow.id);
+                          }
+                        }}
                       >
-                        <Icon name="x" className="size-2" />
-                      </Button>
-                    </div>
+                        <Icon name="x" className="size-2.5" />
+                      </span>
+                    </Button>
                   ))}
 
                   {/*<Select value={boxShadow || 'none'} onValueChange={handleBoxShadowChange}>*/}
@@ -628,12 +643,14 @@ export default function EffectControls({ layer, onLayerUpdate, activeTextStyleKe
                     step={1}
                   />
                 </div>
-                <Button
-                  variant="ghost" size="xs"
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
                   onClick={handleRemoveBlur}
                 >
-                  <Icon name="x" />
-                </Button>
+                  <Icon name="x" className="size-2.5" />
+                </span>
               </div>
             </div>
           )}
@@ -661,12 +678,14 @@ export default function EffectControls({ layer, onLayerUpdate, activeTextStyleKe
                     step={1}
                   />
                 </div>
-                <Button
-                  variant="ghost" size="xs"
+                <span
+                  role="button"
+                  tabIndex={0}
+                  className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
                   onClick={handleRemoveBackdropBlur}
                 >
-                  <Icon name="x" />
-                </Button>
+                  <Icon name="x" className="size-2.5" />
+                </span>
               </div>
             </div>
           )}

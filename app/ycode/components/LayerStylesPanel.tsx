@@ -302,7 +302,7 @@ export default function LayerStylesPanel({
                     {styles.length === 0 ? (
                     <span className="opacity-50">Select a style...</span>
                     ) : (
-                    <SelectValue placeholder="Select a style..." />
+                    <SelectValue placeholder="Select..." />
                     )}
                     {/* Show "Customised" badge when there are overrides */}
                     {hasOverrides && (

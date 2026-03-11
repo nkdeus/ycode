@@ -473,7 +473,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
 
           if (response.error) {
             console.error('[Editor] Error loading initial data:', response.error);
-            setBuilderDataPreloaded(true); // Allow UI to render even on error
+
+            if (response.error === 'Not authenticated') {
+              toast.error('You have been disconnected, please reload the page');
+            }
+
+            setBuilderDataPreloaded(true);
             return;
           }
 

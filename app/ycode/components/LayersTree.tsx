@@ -17,7 +17,7 @@ import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react'
 
 // 2. External libraries
 import { DndContext, DragOverlay, DragStartEvent, DragEndEvent, DragOverEvent, PointerSensor, useSensor, useSensors, closestCenter, useDraggable, useDroppable } from '@dnd-kit/core';
-import { Layers as LayersIcon, Component as ComponentIcon, EyeOff } from 'lucide-react';
+import { Layers as LayersIcon, Component as ComponentIcon } from 'lucide-react';
 
 // 4. Internal components
 import LayerContextMenu from './LayerContextMenu';
@@ -152,6 +152,7 @@ interface LayerRowProps {
   isRenaming: boolean;
   onRenameStart: (id: string) => void;
   onRenameConfirm: (id: string, newName: string | null) => void;
+  onToggleVisibility: (id: string) => void;
 }
 
 // Helper to check if a node is a descendant of another
@@ -194,6 +195,7 @@ const LayerRow = React.memo(function LayerRow({
   isRenaming,
   onRenameStart,
   onRenameConfirm,
+  onToggleVisibility,
 }: LayerRowProps) {
   const getStyleById = useLayerStylesStore((state) => state.getStyleById);
   const getComponentById = useComponentsStore((state) => state.getComponentById);
@@ -549,15 +551,34 @@ const LayerRow = React.memo(function LayerRow({
             />
           )}
 
-          {/* Hidden indicator */}
-          {node.layer.settings?.hidden && (
-            <Icon
-              name="eye-off"
+          {/* Visibility toggle */}
+          {node.id !== 'body' && !isRenaming && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleVisibility(node.id);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
               className={cn(
-                'size-3 mr-3 opacity-50',
-                isSelected && 'opacity-100',
+                'size-6 flex items-center justify-center shrink-0 mr-1 rounded cursor-pointer',
+                node.layer.settings?.hidden
+                  ? cn(
+                    'opacity-60',
+                    isSelected ? 'opacity-80 hover:opacity-100' : 'hover:opacity-100'
+                  )
+                  : cn(
+                    'opacity-0 group-hover:opacity-40',
+                    isSelected ? 'group-hover:opacity-60' : '',
+                    'hover:!opacity-100'
+                  ),
               )}
-            />
+              aria-label={node.layer.settings?.hidden ? 'Show element' : 'Hide element'}
+            >
+              <Icon
+                name={node.layer.settings?.hidden ? 'eye-off' : 'eye'}
+                className="size-3"
+              />
+            </button>
           )}
         </div>
       </div>
@@ -821,6 +842,25 @@ export default function LayersTree({
 
     setRenamingLayerId(null);
   }, [editingComponentId, pageId, updateLayer, updateComponentDraft, setRenamingLayerId]);
+
+  const handleToggleVisibility = useCallback((id: string) => {
+    const node = flattenedNodes.find(n => n.id === id);
+    if (!node) return;
+
+    const currentSettings = node.layer.settings || {};
+    const newHidden = !currentSettings.hidden;
+    const updates: Partial<Layer> = {
+      settings: { ...currentSettings, hidden: newHidden }
+    };
+
+    if (editingComponentId) {
+      const { componentDrafts } = useComponentsStore.getState();
+      const compLayers = componentDrafts[editingComponentId] || [];
+      updateComponentDraft(editingComponentId, updateLayerProps(compLayers, id, updates));
+    } else {
+      updateLayer(pageId, id, updates);
+    }
+  }, [editingComponentId, pageId, updateLayer, updateComponentDraft, flattenedNodes]);
 
   // Configure sensors for drag detection
   const sensors = useSensors(
@@ -1631,6 +1671,7 @@ export default function LayersTree({
               isRenaming={renamingLayerId === node.id}
               onRenameStart={handleRenameStart}
               onRenameConfirm={handleRenameConfirm}
+              onToggleVisibility={handleToggleVisibility}
             />
           );
         })}

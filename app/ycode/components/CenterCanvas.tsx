@@ -1793,7 +1793,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
               <Button variant="input" size="sm">
                 {Math.round(zoom)}%
                 <div>
-                  <Icon name="chevronCombo" className="size-2.5! opacity-50" />
+                  <Icon name="chevronDown" className="size-2.5! opacity-50" />
                 </div>
               </Button>
             </DropdownMenuTrigger>

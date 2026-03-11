@@ -1,6 +1,7 @@
+import { cache } from 'react';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
-import { getItemWithValues, getItemsWithValues } from '@/lib/repositories/collectionItemRepository';
+import { getItemWithValues, getItemsWithValues, getItemIdsByFieldValue } from '@/lib/repositories/collectionItemRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
@@ -243,7 +244,7 @@ async function getCollectionItemBySlug(
  * @param isPublished - Whether to fetch published or draft version
  * @param paginationContext - Optional pagination context with page numbers from URL
  */
-export async function fetchPageByPath(
+export const fetchPageByPath = cache(async function fetchPageByPath(
   slugPath: string,
   isPublished: boolean,
   paginationContext?: PaginationContext,
@@ -284,25 +285,16 @@ export async function fetchPageByPath(
       translations = trans;
     }
 
-    // Get all pages and folders to match the full path
-    const { data: pages } = await supabase
-      .from('pages')
-      .select('*')
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
-
-    const { data: folders } = await supabase
-      .from('page_folders')
-      .select('*')
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
+    // Fetch pages, folders, and components in parallel
+    const [{ data: pages }, { data: folders }, components] = await Promise.all([
+      supabase.from('pages').select('*').eq('is_published', isPublished).is('deleted_at', null),
+      supabase.from('page_folders').select('*').eq('is_published', isPublished).is('deleted_at', null),
+      fetchComponents(supabase, isPublished),
+    ]);
 
     if (!pages || !folders) {
       return null;
     }
-
-    // Fetch all components once at the start
-    const components = await fetchComponents(supabase, isPublished);
 
     const targetPath = pathWithoutLocale;
 
@@ -456,8 +448,9 @@ export async function fetchPageByPath(
             // Then resolve collection layers (nested collections will handle their own injection)
             // The isPublished parameter controls which collection items to fetch
             // Pass enhanced values so nested collections can filter based on dynamic page data
+            // Pass collectionItem.id so inverse reference layers can query by parent item
             let resolvedLayers = layersWithInjectedData.length > 0
-              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations)
+              ? await resolveCollectionLayers(layersWithInjectedData, isPublished, enhancedItemValues, paginationContext, translations, collectionItem.id)
               : [];
 
             // Resolve collections inside rich text embedded components
@@ -546,7 +539,7 @@ export async function fetchPageByPath(
     console.error('Failed to fetch page:', error);
     return null;
   }
-}
+});
 
 /**
  * Fetch error page by error code (404, 401, 500)
@@ -643,7 +636,7 @@ export async function fetchErrorPage(
  * @param paginationContext - Optional pagination context with page numbers from URL
  * @param preloadedComponents - Optional pre-fetched components to avoid redundant queries
  */
-export async function fetchHomepage(
+export const fetchHomepage = cache(async function fetchHomepage(
   isPublished: boolean,
   paginationContext?: PaginationContext,
   preloadedComponents?: Component[],
@@ -656,29 +649,24 @@ export async function fetchHomepage(
       return null;
     }
 
-    // Get all active locales from the database
-    const { data: availableLocales } = await supabase
-      .from('locales')
-      .select('*')
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
-
-    // Get the homepage
-    const { data: homepage } = await supabase
-      .from('pages')
-      .select('*')
-      .eq('is_index', true)
-      .is('page_folder_id', null)
-      .eq('is_published', isPublished)
-      .is('deleted_at', null)
-      .limit(1)
-      .single();
+    // Fetch locales, homepage, and components in parallel
+    const [
+      { data: availableLocales },
+      { data: homepage },
+      componentsResult,
+    ] = await Promise.all([
+      supabase.from('locales').select('*').eq('is_published', isPublished).is('deleted_at', null),
+      supabase.from('pages').select('*').eq('is_index', true).is('page_folder_id', null).eq('is_published', isPublished).is('deleted_at', null).limit(1).single(),
+      preloadedComponents ? Promise.resolve(preloadedComponents) : fetchComponents(supabase, isPublished),
+    ]);
 
     if (!homepage) {
       return null;
     }
 
-    // Get layers for homepage
+    const components = componentsResult;
+
+    // Get layers for homepage (depends on homepage.id)
     const { data: pageLayers, error: layersError } = await supabase
       .from('page_layers')
       .select('*')
@@ -692,9 +680,6 @@ export async function fetchHomepage(
     if (layersError) {
       return null;
     }
-
-    // Use preloaded components if available, otherwise fetch them
-    const components = preloadedComponents || await fetchComponents(supabase, isPublished);
 
     // First, resolve components so collection layers inside components are available
     const layersWithComponents = resolveComponents(pageLayers?.layers || [], components);
@@ -725,7 +710,7 @@ export async function fetchHomepage(
   } catch (error) {
     return null;
   }
-}
+});
 
 /**
  * Inject translated text and assets into layers recursively
@@ -1118,6 +1103,32 @@ async function injectCollectionData(
         src: createResolvedAssetVariable(bgImageSrc.data.field_id, resolvedValue, bgImageSrc),
       },
     };
+  }
+
+  // Lightbox CMS field binding — resolve filesField to concrete asset IDs/URLs
+  const lightboxSettings = layer.settings?.lightbox;
+  if (lightboxSettings?.filesSource === 'cms' && lightboxSettings.filesField && isFieldVariable(lightboxSettings.filesField)) {
+    const resolvedValue = resolveFieldValueWithRelationships(lightboxSettings.filesField, enhancedValues, layerDataMap);
+    if (resolvedValue) {
+      // The value can be a single asset ID, a comma-separated list, or a JSON array
+      let resolvedFiles: string[];
+      try {
+        const parsed = JSON.parse(resolvedValue);
+        resolvedFiles = Array.isArray(parsed) ? parsed : [resolvedValue];
+      } catch {
+        resolvedFiles = resolvedValue.includes(',')
+          ? resolvedValue.split(',').map(s => s.trim()).filter(Boolean)
+          : [resolvedValue];
+      }
+      updates.settings = {
+        ...layer.settings,
+        ...updates.settings,
+        lightbox: {
+          ...lightboxSettings,
+          files: resolvedFiles,
+        },
+      };
+    }
   }
 
   // Design color field bindings → inline styles (supports solid + gradient)
@@ -1518,7 +1529,8 @@ export async function resolveCollectionLayers(
   isPublished: boolean,
   parentItemValues?: Record<string, string>,
   paginationContext?: PaginationContext,
-  translations?: Record<string, Translation>
+  translations?: Record<string, Translation>,
+  parentCollectionItemId?: string
 ): Promise<Layer[]> {
   // Fetch timezone setting for date formatting
   const timezone = (await getSettingByKey('timezone') as string | null) || 'UTC';
@@ -1526,7 +1538,8 @@ export async function resolveCollectionLayers(
   const resolveLayer = async (
     layer: Layer,
     itemValues?: Record<string, string>,
-    parentLayerDataMap?: Record<string, Record<string, string>>
+    parentLayerDataMap?: Record<string, Record<string, string>>,
+    parentItemId?: string
   ): Promise<Layer> => {
     // Merge parent's layer data map with layer's own map
     const layerDataMap = { ...parentLayerDataMap, ...(layer._layerDataMap || {}) };
@@ -1656,7 +1669,16 @@ export async function resolveCollectionLayers(
           // For reference/multi-reference fields, get allowed item IDs BEFORE fetching
           // This ensures pagination counts and offsets are correct for the filtered set
           let allowedItemIds: string[] | undefined;
-          if (sourceFieldId && itemValues) {
+          if (sourceFieldType === 'inverse_reference' && sourceFieldId && parentItemId) {
+            // Inverse reference: find items in this collection where the reference field
+            // points back to the parent item (the field is on THIS collection, not the parent)
+            allowedItemIds = await getItemIdsByFieldValue(
+              collectionVariable.id,
+              sourceFieldId,
+              parentItemId,
+              isPublished
+            );
+          } else if (sourceFieldId && itemValues) {
             const refValue = itemValues[sourceFieldId];
             if (refValue) {
               if (sourceFieldType === 'reference') {
@@ -1740,7 +1762,6 @@ export async function resolveCollectionLayers(
 
           // Find slug field for building collection item URLs
           const slugField = collectionFields.find(f => f.key === 'slug');
-
           // Clone the collection layer for each item (design settings apply to each repeated item)
           // For each item, resolve nested collection layers with that item's values
           // Note: Pagination is now a sibling layer, not a child, so no filtering needed
@@ -1767,8 +1788,9 @@ export async function resolveCollectionLayers(
 
               // Resolve children for THIS specific item's values
               // This ensures nested collection layers filter based on this item's reference fields
+              // Pass item.id so inverse reference children can query by parent item ID
               const resolvedChildren = layer.children?.length
-                ? await Promise.all(layer.children.map(child => resolveLayer(child, enhancedValues, updatedLayerDataMap)))
+                ? await Promise.all(layer.children.map(child => resolveLayer(child, enhancedValues, updatedLayerDataMap, item.id)))
                 : [];
 
               // Then inject field data into the resolved children
@@ -1869,7 +1891,7 @@ export async function resolveCollectionLayers(
           console.error(`Failed to resolve collection layer ${layer.id}:`, error);
           return {
             ...layer,
-            children: layer.children ? await Promise.all(layer.children.map(child => resolveLayer(child, itemValues, layerDataMap))) : undefined,
+            children: layer.children ? await Promise.all(layer.children.map(child => resolveLayer(child, itemValues, layerDataMap, parentItemId))) : undefined,
           };
         }
       }
@@ -1940,14 +1962,14 @@ export async function resolveCollectionLayers(
     if (layer.children) {
       return {
         ...layer,
-        children: await Promise.all(layer.children.map(child => resolveLayer(child, itemValues, layerDataMap))),
+        children: await Promise.all(layer.children.map(child => resolveLayer(child, itemValues, layerDataMap, parentItemId))),
       };
     }
 
     return layer;
   };
 
-  const result = await Promise.all(layers.map(layer => resolveLayer(layer, parentItemValues, undefined)));
+  const result = await Promise.all(layers.map(layer => resolveLayer(layer, parentItemValues, undefined, parentCollectionItemId)));
 
   // Collect pagination metadata from all fragments
   const paginationMetaMap: Record<string, CollectionPaginationMeta> = {};
@@ -2387,7 +2409,8 @@ export async function renderCollectionItemsToHtml(
         isPublished,
         item.values, // Parent item values for multi-reference filtering
         undefined, // No pagination context for Load More rendering
-        undefined // TODO: Add translation support for Load More pagination
+        undefined, // TODO: Add translation support for Load More pagination
+        item.id // Parent item ID for inverse reference resolution
       );
 
       // Resolve all AssetVariables to URLs server-side
@@ -3025,6 +3048,31 @@ function layerToHtml(
   if (layer.name === 'slider' && layer.settings?.slider) {
     attrs.push(`data-slider-id="${escapeHtml(layer.id)}"`);
     attrs.push(`data-slider-settings="${escapeHtml(JSON.stringify(layer.settings.slider))}"`);
+  }
+
+  // Add lightbox data attributes for the lightbox layer
+  if (layer.name === 'lightbox' && layer.settings?.lightbox) {
+    const lbSettings = layer.settings.lightbox;
+    const triggerId = lbSettings.groupId || layer.id;
+    attrs.push(`data-lightbox-id="${escapeHtml(triggerId)}"`);
+    // Strip builder-only fields from serialized settings
+    const { filesField: _ff, filesSource: _fs, ...runtimeSettings } = lbSettings;
+    attrs.push(`data-lightbox-settings="${escapeHtml(JSON.stringify(runtimeSettings))}"`);
+    // Resolve lightbox file asset IDs to URLs
+    const resolvedFiles = lbSettings.files
+      .map((fileId: string) => {
+        if (fileId.startsWith('http') || fileId.startsWith('/')) return fileId;
+        const asset = assetMap?.[fileId];
+        return asset?.public_url ?? null;
+      })
+      .filter(Boolean) as string[];
+    if (resolvedFiles.length) {
+      attrs.push(`data-lightbox-files="${escapeHtml(resolvedFiles.join(','))}"`);
+    }
+    // For grouped lightboxes, set which image to open to
+    if (lbSettings.groupId && resolvedFiles.length > 0) {
+      attrs.push(`data-lightbox-open-to="${escapeHtml(resolvedFiles[0])}"`);
+    }
   }
 
   // Render filter-dependent conditional visibility data attributes
