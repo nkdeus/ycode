@@ -9,7 +9,11 @@
       "WebSearch",
       "Bash(node .claude/skills/ycode/scripts/ycode-db.js dump-tree ffcedc86-ecf9-44c4-9c02-05a0e065fcb5)",
       "Bash(node .claude/skills/ycode/scripts/add-faq.js)",
-      "Bash(node .claude/skills/ycode/scripts/add-faq.mjs)"
+      "Bash(node .claude/skills/ycode/scripts/add-faq.mjs)",
+      "WebFetch(domain:conciergerieeasystay.fr)",
+      "Bash(git merge:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
