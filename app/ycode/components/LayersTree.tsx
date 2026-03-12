@@ -34,7 +34,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 // 6. Utils/lib
 import { cn } from '@/lib/utils';
 import { flattenTree, type FlattenedItem } from '@/lib/tree-utilities';
-import { canHaveChildren, getLayerIcon, getLayerName, getCollectionVariable, isTextContentLayer, isRichTextLayer, getRichTextSublayers, canMoveLayer, updateLayerProps, filterDisabledSliderLayers } from '@/lib/layer-utils';
+import { canHaveChildren, getLayerIcon, getLayerName, getCollectionVariable, isTextContentLayer, isRichTextLayer, getRichTextSublayers, getTextStyleSublayers, canMoveLayer, updateLayerProps, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
 import { hasStyleOverrides } from '@/lib/layer-style-utils';
 import { getUserInitials, getDisplayName } from '@/lib/collaboration-utils';
@@ -204,6 +204,7 @@ const LayerRow = React.memo(function LayerRow({
 
   // Use selective subscriptions to avoid re-renders when unrelated state changes
   const setActiveSublayerIndex = useEditorStore((state) => state.setActiveSublayerIndex);
+  const setActiveTextStyleKey = useEditorStore((state) => state.setActiveTextStyleKey);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
   const interactionTriggerLayerIds = useEditorStore((state) => state.interactionTriggerLayerIds);
   const interactionTargetLayerIds = useEditorStore((state) => state.interactionTargetLayerIds);
@@ -284,7 +285,9 @@ const LayerRow = React.memo(function LayerRow({
   // Component instances should not show children in the tree (unless editing master)
   // Children can only be edited via "Edit master component"
   const shouldHideChildren = isComponentInstance && !editingComponentId;
-  const hasSublayers = isRichTextLayer(node.layer) && getRichTextSublayers(node.layer).length > 0;
+  const hasContentSublayers = isRichTextLayer(node.layer) && getRichTextSublayers(node.layer).length > 0;
+  const hasStyleSublayers = isTextContentLayer(node.layer) && getTextStyleSublayers(node.layer).length > 0;
+  const hasSublayers = hasContentSublayers || hasStyleSublayers;
   const effectiveHasChildren = (hasChildren && !shouldHideChildren) || hasSublayers;
 
   // Use purple ONLY for component instances (not for all layers when editing a component)
@@ -307,8 +310,23 @@ const LayerRow = React.memo(function LayerRow({
   // Check if this is the Body layer (locked)
   const isLocked = node.layer.id === 'body';
 
-  // Sublayer rows (TipTap content blocks inside richText elements)
+  // Sublayer rows (content blocks or text style targets)
   if (node.sublayer) {
+    const handleSublayerClick = () => {
+      // Always select the actual layer (works for both direct and nested sublayers)
+      onSelect(node.layer.id);
+      if (node.sublayer!.kind === 'content') {
+        setActiveSublayerIndex(node.index);
+        setActiveTextStyleKey(node.sublayer!.styleKey ?? null);
+      } else {
+        setActiveSublayerIndex(null);
+        setActiveTextStyleKey(node.sublayer!.styleKey ?? null);
+      }
+    };
+
+    const hasExpandableChildren = node.canHaveChildren;
+    const isSubCollapsed = node.collapsed || false;
+
     return (
       <div className="relative">
         {node.depth > 0 && (
@@ -335,12 +353,24 @@ const LayerRow = React.memo(function LayerRow({
             !isSelected && !isChildOfSelected && 'rounded-lg text-secondary-foreground/80 dark:text-muted-foreground',
           )}
           style={{ paddingLeft: `${node.depth * 14 + 8}px` }}
-          onClick={() => {
-            onSelect(node.parentId!);
-            setActiveSublayerIndex(node.index);
-          }}
+          onClick={handleSublayerClick}
         >
-          <div className="w-4 h-4 shrink-0" />
+          {hasExpandableChildren ? (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle(node.id);
+              }}
+              className={cn(
+                'w-4 h-4 flex items-center justify-center shrink-0',
+                isSubCollapsed ? '' : 'rotate-90',
+              )}
+            >
+              <Icon name="chevronRight" className={cn('size-2.5 opacity-50', isSelected && 'opacity-80')} />
+            </button>
+          ) : (
+            <div className="w-4 h-4 shrink-0" />
+          )}
           <Icon
             name={node.sublayer.icon as any}
             className={cn('size-3 mx-1.5 shrink-0', isSelected ? 'opacity-70' : 'opacity-40')}
@@ -763,7 +793,7 @@ export default function LayersTree({
   const [shouldScrollToSelected, setShouldScrollToSelected] = useState(false);
 
   // Pull multi-select state and breakpoint from editor store
-  const { selectedLayerIds: storeSelectedLayerIds, lastSelectedLayerId, toggleSelection, selectRange, editingComponentId, activeBreakpoint, activeSublayerIndex: storeActiveSublayerIndex } = useEditorStore();
+  const { selectedLayerIds: storeSelectedLayerIds, lastSelectedLayerId, toggleSelection, selectRange, editingComponentId, activeBreakpoint, activeSublayerIndex: storeActiveSublayerIndex, activeTextStyleKey: storeActiveTextStyleKey } = useEditorStore();
 
   // Get component by ID function for drag overlay
   const { getComponentById } = useComponentsStore();
@@ -827,23 +857,67 @@ export default function LayersTree({
         }
       }
 
-      // Inject sublayer nodes for expanded richText elements
+      // Inject sublayer nodes for expanded text elements
       const withSublayers: FlattenedItem[] = [];
       for (const node of flattened) {
         withSublayers.push(node);
-        if (isRichTextLayer(node.layer) && !collapsedIds.has(node.id)) {
-          const sublayers = getRichTextSublayers(node.layer);
-          sublayers.forEach((sub, idx) => {
-            withSublayers.push({
-              id: `${node.id}__sub_${idx}`,
-              layer: node.layer,
-              depth: node.depth + 1,
-              parentId: node.id,
-              index: idx,
-              canHaveChildren: false,
-              sublayer: sub,
+        if (!collapsedIds.has(node.id)) {
+          let subIdx = 0;
+
+          // Content sublayers (TipTap blocks) for richText
+          // Each content block may have inline mark children (bold, italic, etc.)
+          if (isRichTextLayer(node.layer)) {
+            const contentSubs = getRichTextSublayers(node.layer);
+            contentSubs.forEach((sub) => {
+              const contentSubId = `${node.id}__sub_${subIdx}`;
+              const hasMarkChildren = sub.children && sub.children.length > 0;
+
+              withSublayers.push({
+                id: contentSubId,
+                layer: node.layer,
+                depth: node.depth + 1,
+                parentId: node.id,
+                index: subIdx,
+                collapsed: hasMarkChildren ? collapsedIds.has(contentSubId) : undefined,
+                canHaveChildren: !!hasMarkChildren,
+                sublayer: sub,
+              });
+              subIdx++;
+
+              // Nest inline mark sublayers under expanded content blocks
+              if (hasMarkChildren && !collapsedIds.has(contentSubId)) {
+                sub.children!.forEach((markSub) => {
+                  withSublayers.push({
+                    id: `${contentSubId}__mark_${markSub.styleKey}`,
+                    layer: node.layer,
+                    depth: node.depth + 2,
+                    parentId: contentSubId,
+                    index: subIdx,
+                    canHaveChildren: false,
+                    sublayer: markSub,
+                  });
+                  subIdx++;
+                });
+              }
             });
-          });
+          }
+
+          // Style sublayers for text/heading only (richText nests them under content blocks)
+          if (isTextContentLayer(node.layer)) {
+            const styleSubs = getTextStyleSublayers(node.layer);
+            styleSubs.forEach((sub) => {
+              withSublayers.push({
+                id: `${node.id}__style_${sub.styleKey}`,
+                layer: node.layer,
+                depth: node.depth + 1,
+                parentId: node.id,
+                index: subIdx,
+                canHaveChildren: false,
+                sublayer: sub,
+              });
+              subIdx++;
+            });
+          }
         }
       }
 
@@ -1615,9 +1689,12 @@ export default function LayersTree({
       return next;
     });
 
-    // Persist the change to the layer tree (outside of setState)
-    const updatedLayers = updateLayerOpenState(layers, id, willBeOpen);
-    onReorder(updatedLayers);
+    // Only persist for real layers (virtual sublayer nodes are local UI state only)
+    const isVirtualNode = id.includes('__sub_') || id.includes('__style_') || id.includes('__mark_');
+    if (!isVirtualNode) {
+      const updatedLayers = updateLayerOpenState(layers, id, willBeOpen);
+      onReorder(updatedLayers);
+    }
   }, [layers, onReorder, collapsedIds]);
 
   // Handle layer selection
@@ -1633,14 +1710,21 @@ export default function LayersTree({
     const selectedIdsSet = new Set(selectedLayerIds);
     if (selectedLayerId) selectedIdsSet.add(selectedLayerId);
 
-    // When a sublayer is active, treat it as the selected item
-    // and demote the parent richText layer to "has selected child"
-    const hasSublayerActive = storeActiveSublayerIndex !== null && selectedLayerId !== null;
+    // When a sublayer (content or style) is active, treat it as selected
+    // and demote the parent layer to "has selected child"
+    const hasContentSublayerActive = storeActiveSublayerIndex !== null && selectedLayerId !== null;
+    const hasStyleSublayerActive = storeActiveTextStyleKey !== null && selectedLayerId !== null;
+    const hasSublayerActive = hasContentSublayerActive || hasStyleSublayerActive;
     let activeSublayerNodeId: string | null = null;
 
-    if (hasSublayerActive) {
+    if (hasContentSublayerActive) {
       activeSublayerNodeId = flattenedNodes.find(
-        n => n.sublayer && n.parentId === selectedLayerId && n.index === storeActiveSublayerIndex
+        n => n.sublayer && n.sublayer.kind === 'content' && n.parentId === selectedLayerId && n.index === storeActiveSublayerIndex
+      )?.id ?? null;
+    } else if (hasStyleSublayerActive) {
+      // Direct style sublayers (text/heading layers) or nested mark sublayers (richText)
+      activeSublayerNodeId = flattenedNodes.find(
+        n => n.sublayer && n.sublayer.kind === 'style' && n.sublayer.styleKey === storeActiveTextStyleKey && n.layer.id === selectedLayerId
       )?.id ?? null;
     }
 
@@ -1648,7 +1732,7 @@ export default function LayersTree({
     const nodeById = new Map<string, FlattenedItem>();
     flattenedNodes.forEach(node => nodeById.set(node.id, node));
 
-    // Effective selected set: exclude the parent richText layer when a sublayer is active
+    // Effective selected set: exclude the parent layer when a sublayer is active
     const effectiveSelectedSet = new Set(selectedIdsSet);
     if (hasSublayerActive && activeSublayerNodeId) {
       effectiveSelectedSet.delete(selectedLayerId!);
@@ -1705,10 +1789,20 @@ export default function LayersTree({
       const isChildOfSelected = parentSelectedId !== null;
       const isLastVisibleDescendant = parentSelectedId !== null &&
         lastDescendantMap.get(parentSelectedId!) === node.id;
-      const hasRichTextSublayers = isRichTextLayer(node.layer) && getRichTextSublayers(node.layer).length > 0;
-      const hasVisibleChildren = (!collapsedIds.has(node.id)) && (
-        !!(node.layer.children && node.layer.children.length > 0) || hasRichTextSublayers
-      );
+      const isSublayerNode = !!node.sublayer;
+      let hasVisibleChildren: boolean;
+
+      if (isSublayerNode) {
+        // Virtual sublayer nodes: visible children = expandable and not collapsed
+        hasVisibleChildren = node.canHaveChildren && !collapsedIds.has(node.id);
+      } else {
+        // Real layer nodes: check actual children and sublayer presence
+        const hasAnySublayers = (isRichTextLayer(node.layer) && getRichTextSublayers(node.layer).length > 0)
+          || (isTextContentLayer(node.layer) && getTextStyleSublayers(node.layer).length > 0);
+        hasVisibleChildren = (!collapsedIds.has(node.id)) && (
+          !!(node.layer.children && node.layer.children.length > 0) || hasAnySublayers
+        );
+      }
 
       result.set(node.id, {
         isSelected: effectiveSelectedSet.has(node.id),
@@ -1719,7 +1813,7 @@ export default function LayersTree({
     });
 
     return result;
-  }, [flattenedNodes, selectedLayerIds, selectedLayerId, collapsedIds, storeActiveSublayerIndex]);
+  }, [flattenedNodes, selectedLayerIds, selectedLayerId, collapsedIds, storeActiveSublayerIndex, storeActiveTextStyleKey]);
 
   return (
     <DndContext

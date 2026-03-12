@@ -8,6 +8,7 @@ import { iconExists, IconProps } from '@/components/ui/icon';
 import { getBlockIcon, getBlockName } from '@/lib/templates/blocks';
 import { isSliderLayerName } from '@/lib/templates/utilities';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
+import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 import { applyComponentOverrides } from '@/lib/resolve-components';
 import { resolveFieldFromSources } from '@/lib/cms-variables-utils';
 import { parseMultiReferenceValue } from '@/lib/collection-utils';
@@ -462,6 +463,12 @@ export interface RichTextSublayer {
   type: string;
   label: string;
   icon: string;
+  /** 'content' = actual TipTap block, 'style' = text style target */
+  kind: 'content' | 'style';
+  /** For style sublayers: the textStyles key (e.g., 'h1', 'bold', 'paragraph') */
+  styleKey?: string;
+  /** For content sublayers: inline mark children found in this block */
+  children?: RichTextSublayer[];
 }
 
 const SUBLAYER_ICON_MAP: Record<string, string> = {
@@ -475,8 +482,46 @@ const SUBLAYER_ICON_MAP: Record<string, string> = {
 };
 
 /**
- * Extract sublayer metadata from a richText layer's TipTap content.
+ * Maps TipTap content block types to textStyle keys.
+ * Used when selecting a content sublayer to also target the correct text style.
+ */
+export function contentBlockToStyleKey(block: { type: string; attrs?: Record<string, any> }): string | null {
+  switch (block.type) {
+    case 'paragraph': return 'paragraph';
+    case 'heading': return `h${block.attrs?.level || 1}`;
+    case 'bulletList': return 'bulletList';
+    case 'orderedList': return 'orderedList';
+    case 'blockquote': return 'blockquote';
+    case 'richTextImage': return 'richTextImage';
+    default: return null;
+  }
+}
+
+/**
+ * Recursively extract all unique inline mark types from a TipTap content block.
+ */
+function extractInlineMarks(block: any): string[] {
+  const marks = new Set<string>();
+
+  function traverse(node: any) {
+    if (node.marks && Array.isArray(node.marks)) {
+      node.marks.forEach((mark: any) => {
+        if (mark.type) marks.add(mark.type);
+      });
+    }
+    if (node.content && Array.isArray(node.content)) {
+      node.content.forEach(traverse);
+    }
+  }
+
+  traverse(block);
+  return Array.from(marks);
+}
+
+/**
+ * Extract content sublayer metadata from a richText layer's TipTap content.
  * Returns one entry per top-level block (paragraph, heading, list, etc.).
+ * Each block includes inline mark children (bold, italic, etc.) found in its content.
  */
 export function getRichTextSublayers(layer: Layer): RichTextSublayer[] {
   const textVar = layer.variables?.text;
@@ -504,8 +549,71 @@ export function getRichTextSublayers(layer: Layer): RichTextSublayer[] {
 
       const label = SUBLAYER_LABEL_MAP[type] || type;
 
-      return { type, label, icon };
+      const marks = extractInlineMarks(block);
+      const markChildren = INLINE_STYLE_KEYS
+        .filter(k => marks.includes(k))
+        .map(markType => ({
+          type: markType,
+          label: DEFAULT_TEXT_STYLES[markType]?.label || markType,
+          icon: STYLE_SUBLAYER_ICON_MAP[markType] || 'type',
+          kind: 'style' as const,
+          styleKey: markType,
+        }));
+
+      return {
+        type, label, icon, kind: 'content' as const,
+        styleKey: contentBlockToStyleKey(block) ?? undefined,
+        children: markChildren.length > 0 ? markChildren : undefined,
+      };
     });
+}
+
+const STYLE_SUBLAYER_ICON_MAP: Record<string, string> = {
+  paragraph: 'text',
+  h1: 'heading',
+  h2: 'heading',
+  h3: 'heading',
+  h4: 'heading',
+  h5: 'heading',
+  h6: 'heading',
+  bold: 'bold',
+  italic: 'italic',
+  underline: 'underline',
+  strike: 'strikethrough',
+  link: 'link',
+  bulletList: 'listUnordered',
+  orderedList: 'listOrdered',
+  listItem: 'text',
+  blockquote: 'quote',
+  richTextImage: 'image',
+};
+
+/** Inline mark style keys shown for all text layers */
+const INLINE_STYLE_KEYS = ['bold', 'italic', 'underline', 'strike', 'link'];
+
+/**
+ * Get text style sublayers for a layer.
+ * These represent styleable text element types (Bold, Italic, Heading 1, etc.)
+ */
+export function getTextStyleSublayers(layer: Layer): RichTextSublayer[] {
+  if (!isTextContentLayer(layer) && !isRichTextLayer(layer)) return [];
+
+  const keys = INLINE_STYLE_KEYS;
+
+  const allStyles = {
+    ...DEFAULT_TEXT_STYLES,
+    ...layer.textStyles,
+  };
+
+  return keys
+    .filter(key => !key.startsWith('dts-'))
+    .map(key => ({
+      type: key,
+      label: allStyles[key]?.label || key,
+      icon: STYLE_SUBLAYER_ICON_MAP[key] || 'type',
+      kind: 'style' as const,
+      styleKey: key,
+    }));
 }
 
 /**
