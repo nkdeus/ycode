@@ -309,7 +309,6 @@ export function BackupRestoreDialog({
             </Button>
           ) : (
             <Button
-              variant="destructive"
               onClick={handleRestore}
               disabled={loading || !selectedFile}
             >
