@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Eva CSS for Ycode",
+  "version": "1.0.2",
+  "description": "Fluid responsive design overlay for Ycode — constrains sizing inputs to Eva values and injects bridge CSS into the editor canvas.",
+  "permissions": [],
+  "host_permissions": ["*://localhost/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://localhost/ycode/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icons/icon48.png"
+  }
+}

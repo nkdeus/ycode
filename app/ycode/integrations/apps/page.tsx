@@ -197,6 +197,12 @@ export default function AppsPage() {
   // =========================================================================
 
   const openAppSettings = (appId: string) => {
+    // Eva CSS has its own standalone page
+    if (appId === 'eva-css') {
+      window.location.href = '/ycode/integrations/eva-css';
+      return;
+    }
+
     setSelectedAppId(appId);
 
     if (appId === 'mailerlite') {

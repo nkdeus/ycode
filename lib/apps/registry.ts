@@ -15,6 +15,7 @@ import mailerliteLogo from './mailerlite/logo.svg';
 import mailchimpLogo from './mailchimp/logo.svg';
 import zapierLogo from './zapier/logo.svg';
 import makeLogo from './make/logo.svg';
+import evaCssLogo from './eva-css/logo.svg';
 
 // =============================================================================
 // Types
@@ -82,6 +83,14 @@ export const apps: AppDefinition[] = [
     logo: makeLogo,
     categories: ['popular', 'automation'],
     implemented: false,
+  },
+  {
+    id: 'eva-css',
+    name: 'Eva CSS',
+    description: 'Fluid responsive design — converts static pixel values to fluid clamp() values.',
+    logo: evaCssLogo,
+    categories: ['popular'],
+    implemented: true,
   },
 ];
 
