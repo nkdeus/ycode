@@ -887,12 +887,14 @@ const LayerItem: React.FC<{
     // Check for inline variables in DynamicTextVariable format (legacy)
     if (textVariable?.type === 'dynamic_text') {
       const content = textVariable.data.content;
-      if (content.includes('<ycode-inline-variable>')) {
-        // Resolve inline variables with timezone-aware date formatting
-        return resolveInlineVariablesFromData(content, collectionLayerData, pageCollectionItemData ?? undefined, timezone, effectiveLayerDataMap);
+      if (typeof content === 'string') {
+        if (content.includes('<ycode-inline-variable>')) {
+          return resolveInlineVariablesFromData(content, collectionLayerData, pageCollectionItemData ?? undefined, timezone, effectiveLayerDataMap);
+        }
+        return content;
       }
-      // No inline variables, return plain content
-      return content;
+      // Tiptap JSON content (e.g. dynamicVariable nodes) — skip, rendered by RichTextEditor
+      return undefined;
     }
     const text = getText(layer);
     if (text) return text;
@@ -1193,19 +1195,24 @@ const LayerItem: React.FC<{
     return items;
   }, [collectionId, allCollectionItems, sourceFieldId, sourceFieldType, sourceFieldSource, collectionLayerData, pageCollectionItemData, collectionLayerItemId, pageCollectionItemId, getAsset, collectionVariable?.filters, isEditMode]);
 
+  const optionsSourceSort = layer.settings?.optionsSource;
   useEffect(() => {
     if (!isEditMode) return;
     if (!collectionVariable?.id) return;
     // Skip fetching for multi-asset collections (they don't have real collection data)
     if (collectionVariable.source_field_type === 'multi_asset') return;
     if (collectionVariable.id === MULTI_ASSET_COLLECTION_ID) return;
-    if (allCollectionItems.length > 0 || isLoadingLayerData) return;
+    if (isLoadingLayerData) return;
+
+    // Checkbox wrappers store sort config in settings.optionsSource, not in the collection variable
+    const sortBy = optionsSourceSort?.sortFieldId || collectionVariable.sort_by;
+    const sortOrder = optionsSourceSort?.sortOrder || collectionVariable.sort_order;
 
     fetchLayerData(
       layer.id,
       collectionVariable.id,
-      collectionVariable.sort_by,
-      collectionVariable.sort_order,
+      sortBy,
+      sortOrder,
       collectionVariable.limit,
       collectionVariable.offset
     );
@@ -1217,7 +1224,8 @@ const LayerItem: React.FC<{
     collectionVariable?.sort_order,
     collectionVariable?.limit,
     collectionVariable?.offset,
-    allCollectionItems.length,
+    optionsSourceSort?.sortFieldId,
+    optionsSourceSort?.sortOrder,
     isLoadingLayerData,
     fetchLayerData,
     layer.id,
@@ -2001,6 +2009,17 @@ const LayerItem: React.FC<{
         elementProps.defaultValue = elementProps.value;
         delete elementProps.value;
       }
+      // In edit mode, keep checked as a controlled prop (canvas inputs aren't interactive)
+      // so defaults update in real-time. In published mode, convert to defaultChecked
+      // so the input remains uncontrolled and users can interact with it.
+      if ('checked' in elementProps) {
+        if (isEditMode) {
+          elementProps.readOnly = true;
+        } else {
+          elementProps.defaultChecked = elementProps.checked;
+          delete elementProps.checked;
+        }
+      }
       return <Tag {...elementProps} />;
     }
 
@@ -2077,6 +2096,41 @@ const LayerItem: React.FC<{
             }
           } else {
             payload[key] = value;
+          }
+        });
+
+        // Resolve select values to display text instead of raw IDs
+        const selects = form.querySelectorAll('select[name]');
+        selects.forEach((sel) => {
+          const select = sel as HTMLSelectElement;
+          if (select.name && select.selectedIndex >= 0) {
+            const selectedOption = select.options[select.selectedIndex];
+            if (selectedOption && selectedOption.value && selectedOption.text && selectedOption.value !== selectedOption.text) {
+              payload[select.name] = selectedOption.text;
+            }
+          }
+        });
+
+        // Resolve checkbox/radio values to display text instead of raw IDs
+        form.querySelectorAll('input[type="checkbox"]:checked, input[type="radio"]:checked').forEach((el) => {
+          const input = el as HTMLInputElement;
+          if (!input.name || !input.value) return;
+          const parent = input.closest('label') || input.parentElement;
+          if (!parent) return;
+          const labelText = Array.from(parent.children)
+            .filter((n) => n !== input && n.tagName !== 'INPUT')
+            .map((n) => n.textContent?.trim())
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+          if (labelText && labelText !== input.value) {
+            const currentVal = payload[input.name];
+            if (Array.isArray(currentVal)) {
+              const idx = currentVal.indexOf(input.value);
+              if (idx >= 0) currentVal[idx] = labelText;
+            } else if (currentVal === input.value) {
+              payload[input.name] = labelText;
+            }
           }
         });
 
@@ -2606,6 +2660,26 @@ const LayerItem: React.FC<{
               }
             }
 
+            // For checkbox/radio wrappers, always inject checked attribute so inputs
+            // stay controlled for their lifetime (avoids uncontrolled→controlled switch)
+            const checkboxDefaultIds = layer.settings?.optionsSource?.defaultItemIds;
+            const radioDefaultId = layer.settings?.optionsSource?.defaultItemId;
+            const isOptionsSourceLayer = !!layer.settings?.optionsSource?.collectionId;
+            const itemChildren = (isOptionsSourceLayer && effectiveChildren)
+              ? effectiveChildren.map(child => {
+                if (child.name !== 'input') return child;
+                if (child.attributes?.type === 'checkbox') {
+                  const isChecked = checkboxDefaultIds?.includes(item.id) ? 'true' : 'false';
+                  return { ...child, attributes: { ...child.attributes, checked: isChecked } };
+                }
+                if (child.attributes?.type === 'radio') {
+                  const isChecked = radioDefaultId === item.id ? 'true' : 'false';
+                  return { ...child, attributes: { ...child.attributes, checked: isChecked } };
+                }
+                return child;
+              })
+              : effectiveChildren;
+
             return (
               <Tag
                 key={item.id}
@@ -2615,9 +2689,9 @@ const LayerItem: React.FC<{
               >
                 {textContent && textContent}
 
-                {effectiveChildren && effectiveChildren.length > 0 && (
+                {itemChildren && itemChildren.length > 0 && (
                   <LayerRenderer
-                    layers={effectiveChildren}
+                    layers={itemChildren}
                     onLayerClick={onLayerClick}
                     onLayerUpdate={onLayerUpdate}
                     onLayerHover={onLayerHover}
