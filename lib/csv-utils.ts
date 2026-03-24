@@ -67,9 +67,44 @@ interface TipTapNode {
   attrs?: Record<string, unknown>;
 }
 
+/** Extract src and alt from an <img> tag and return a richTextImage node */
+function parseImgTag(imgHtml: string): TipTapNode | null {
+  const srcMatch = imgHtml.match(/src=["']([^"']+)["']/i);
+  if (!srcMatch) return null;
+  const altMatch = imgHtml.match(/alt=["']([^"']*)["']/i);
+  return {
+    type: 'richTextImage',
+    attrs: { src: srcMatch[1], alt: altMatch?.[1] || null, assetId: null },
+  };
+}
+
+/**
+ * Push paragraph content that may contain inline <img> tags.
+ * Images are extracted as sibling richTextImage nodes so they are block-level.
+ */
+function pushParagraphWithImages(innerHtml: string, content: TipTapNode[]): void {
+  // Split on img tags, keeping the img tags in the results
+  const parts = innerHtml.split(/(<img\s[^>]*\/?>)/gi);
+  for (const part of parts) {
+    if (!part.trim()) continue;
+    if (/^<img\s/i.test(part)) {
+      const imgNode = parseImgTag(part);
+      if (imgNode) content.push(imgNode);
+    } else {
+      const text = decodeHtmlEntities(part.replace(/<[^>]+>/g, '').trim());
+      if (text) {
+        content.push({
+          type: 'paragraph',
+          content: [{ type: 'text', text }],
+        });
+      }
+    }
+  }
+}
+
 /**
  * Convert HTML string to TipTap JSON format
- * Handles common HTML tags: p, strong, b, em, i, u, s, strike, ol, ul, li, h1-h6, blockquote, br, a
+ * Handles common HTML tags: p, strong, b, em, i, u, s, strike, ol, ul, li, h1-h6, blockquote, br, a, img
  * Preserves the original order of elements
  */
 function htmlToTipTapJSON(html: string): TipTapNode {
@@ -96,16 +131,15 @@ function htmlToTipTapJSON(html: string): TipTapNode {
     .replace(/\s+class="[^"]*"/gi, '') // Remove class attributes
     .replace(/<br\s*\/?>/gi, '\n'); // Normalize br tags
 
-  // Regex to match block-level elements in order
-  // Matches: <p>, <ol>, <ul>, <h1-6>, <blockquote>, <div>
-  const blockRegex = /<(p|ol|ul|h[1-6]|blockquote|div)(?:\s[^>]*)?>[\s\S]*?<\/\1>/gi;
+  // Regex to match block-level elements and self-closing img tags in order
+  const blockRegex = /<(p|ol|ul|h[1-6]|blockquote|div)(?:\s[^>]*)?>[\s\S]*?<\/\1>|<img\s[^>]*\/?>/gi;
 
   let lastIndex = 0;
   let match;
 
   while ((match = blockRegex.exec(cleanHtml)) !== null) {
-    const tagName = match[1].toLowerCase();
     const fullMatch = match[0];
+    const tagName = (match[1] || '').toLowerCase();
 
     // Process any text between the last match and this one
     if (match.index > lastIndex) {
@@ -121,29 +155,41 @@ function htmlToTipTapJSON(html: string): TipTapNode {
       }
     }
 
+    // Handle <img> tags
+    if (fullMatch.toLowerCase().startsWith('<img')) {
+      const imgNode = parseImgTag(fullMatch);
+      if (imgNode) {
+        content.push(imgNode);
+      }
+      lastIndex = match.index + fullMatch.length;
+      continue;
+    }
+
     // Process the matched element
     if (tagName === 'p' || tagName === 'div') {
-      // Paragraph
-      const innerContent = fullMatch.replace(/<\/?(?:p|div)[^>]*>/gi, '').trim();
-      const textContent = decodeHtmlEntities(innerContent.replace(/<[^>]+>/g, '').trim());
-      if (textContent) {
-        content.push({
-          type: 'paragraph',
-          content: [{ type: 'text', text: textContent }],
-        });
-      }
+      // Extract inline images from inside the paragraph
+      const innerContent = fullMatch.replace(/<\/?(?:p|div)[^>]*>/gi, '');
+      pushParagraphWithImages(innerContent, content);
     } else if (tagName === 'ol' || tagName === 'ul') {
-      // List
+      // List — extract text for list items, and pull images out as sibling blocks
       const isOrdered = tagName === 'ol';
       const listItems: TipTapNode[] = [];
+      const trailingImages: TipTapNode[] = [];
 
-      // Extract list items
       const liRegex = /<li[^>]*>([\s\S]*?)<\/li>/gi;
       let liMatch;
       while ((liMatch = liRegex.exec(fullMatch)) !== null) {
         let itemContent = liMatch[1].trim();
-        // Remove nested <p> tags inside list items
-        itemContent = itemContent.replace(/<\/?p[^>]*>/gi, '').trim();
+
+        // Pull <img> tags out of the list item (they become block-level siblings)
+        const imgMatches = itemContent.match(/<img\s[^>]*\/?>/gi) || [];
+        for (const imgTag of imgMatches) {
+          const imgNode = parseImgTag(imgTag);
+          if (imgNode) trailingImages.push(imgNode);
+        }
+
+        // Strip inner <p>, <div>, and all remaining tags for text
+        itemContent = itemContent.replace(/<\/?(?:p|div)[^>]*>/gi, '').trim();
         const itemText = decodeHtmlEntities(itemContent.replace(/<[^>]+>/g, '').trim());
 
         if (itemText) {
@@ -165,6 +211,8 @@ function htmlToTipTapJSON(html: string): TipTapNode {
           content: listItems,
         });
       }
+      // Append extracted images after the list
+      content.push(...trailingImages);
     } else if (tagName.match(/^h[1-6]$/)) {
       // Heading
       const level = parseInt(tagName[1], 10);
@@ -201,13 +249,7 @@ function htmlToTipTapJSON(html: string): TipTapNode {
   if (lastIndex < cleanHtml.length) {
     const remaining = cleanHtml.slice(lastIndex).trim();
     if (remaining) {
-      const plainText = decodeHtmlEntities(remaining.replace(/<[^>]+>/g, '').trim());
-      if (plainText) {
-        content.push({
-          type: 'paragraph',
-          content: [{ type: 'text', text: plainText }],
-        });
-      }
+      pushParagraphWithImages(remaining, content);
     }
   }
 
@@ -246,52 +288,25 @@ export interface ParsedCSV {
 }
 
 /**
- * Parse CSV text into headers and rows
- * Handles quoted fields and escaped quotes
+ * Parse CSV text into headers and rows.
+ * Handles quoted fields, escaped quotes, and multi-line values inside quotes.
  */
 export function parseCSVText(csvText: string): ParsedCSV {
-  const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
-
-  if (lines.length === 0) {
+  if (!csvText.trim()) {
     return { headers: [], rows: [] };
   }
 
-  // Parse a single line handling quoted fields
-  const parseLine = (line: string): string[] => {
-    const result: string[] = [];
-    let current = '';
-    let inQuotes = false;
+  const records = parseCSVRecords(csvText);
 
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      const nextChar = line[i + 1];
+  if (records.length === 0) {
+    return { headers: [], rows: [] };
+  }
 
-      if (char === '"') {
-        if (inQuotes && nextChar === '"') {
-          // Escaped quote
-          current += '"';
-          i++;
-        } else {
-          // Toggle quote mode
-          inQuotes = !inQuotes;
-        }
-      } else if (char === ',' && !inQuotes) {
-        result.push(current.trim());
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-
-    result.push(current.trim());
-    return result;
-  };
-
-  const headers = parseLine(lines[0]);
+  const headers = records[0];
   const rows: Record<string, string>[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseLine(lines[i]);
+  for (let i = 1; i < records.length; i++) {
+    const values = records[i];
     const row: Record<string, string> = {};
 
     headers.forEach((header, index) => {
@@ -302,6 +317,78 @@ export function parseCSVText(csvText: string): ParsedCSV {
   }
 
   return { headers, rows };
+}
+
+/**
+ * Low-level CSV record parser that correctly handles multi-line quoted fields.
+ * Parses character by character so newlines inside quotes are preserved as
+ * part of the field value instead of splitting into extra rows.
+ */
+function parseCSVRecords(text: string): string[][] {
+  const records: string[][] = [];
+  let fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  let i = 0;
+
+  while (i < text.length) {
+    const char = text[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[i + 1] === '"') {
+          current += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+        i++;
+        continue;
+      }
+      current += char;
+      i++;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      i++;
+      continue;
+    }
+
+    if (char === ',') {
+      fields.push(current.trim());
+      current = '';
+      i++;
+      continue;
+    }
+
+    if (char === '\r' || char === '\n') {
+      // End of record
+      if (char === '\r' && text[i + 1] === '\n') i++;
+      fields.push(current.trim());
+      current = '';
+
+      // Skip blank rows (all-empty fields)
+      if (fields.some(f => f !== '')) {
+        records.push(fields);
+      }
+      fields = [];
+      i++;
+      continue;
+    }
+
+    current += char;
+    i++;
+  }
+
+  // Handle last field / record (file may not end with newline)
+  fields.push(current.trim());
+  if (fields.some(f => f !== '')) {
+    records.push(fields);
+  }
+
+  return records;
 }
 
 /**
@@ -478,4 +565,58 @@ export function getFieldTypeLabel(type: CollectionFieldType): string {
     status: 'Status',
   };
   return labels[type] || type;
+}
+
+/** An image URL found inside TipTap rich-text JSON that needs downloading */
+export interface RichTextImageRef {
+  src: string;
+}
+
+/** Walk TipTap JSON to collect all richTextImage src URLs */
+export function extractRichTextImageUrls(json: string): RichTextImageRef[] {
+  try {
+    const doc = JSON.parse(json);
+    const refs: RichTextImageRef[] = [];
+    walkTipTapNodes(doc, (node) => {
+      const attrs = node.attrs as Record<string, unknown> | undefined;
+      if (node.type === 'richTextImage' && attrs?.src && isValidUrl(attrs.src as string)) {
+        refs.push({ src: attrs.src as string });
+      }
+    });
+    return refs;
+  } catch {
+    return [];
+  }
+}
+
+/** Replace image src URLs in TipTap JSON and set assetId */
+export function replaceRichTextImageUrls(
+  json: string,
+  urlToAsset: Map<string, { assetId: string; publicUrl: string }>
+): string {
+  try {
+    const doc = JSON.parse(json);
+    walkTipTapNodes(doc, (node) => {
+      const attrs = node.attrs as Record<string, unknown> | undefined;
+      if (node.type === 'richTextImage' && attrs?.src) {
+        const replacement = urlToAsset.get(attrs.src as string);
+        if (replacement) {
+          attrs.src = replacement.publicUrl;
+          attrs.assetId = replacement.assetId;
+        }
+      }
+    });
+    return JSON.stringify(doc);
+  } catch {
+    return json;
+  }
+}
+
+function walkTipTapNodes(node: Record<string, unknown>, cb: (n: Record<string, unknown>) => void): void {
+  cb(node);
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) {
+      walkTipTapNodes(child as Record<string, unknown>, cb);
+    }
+  }
 }

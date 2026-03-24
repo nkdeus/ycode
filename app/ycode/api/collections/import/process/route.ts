@@ -17,26 +17,38 @@ import {
   getErrorMessage,
   isAssetFieldType,
   isValidUrl,
+  extractRichTextImageUrls,
+  replaceRichTextImageUrls,
 } from '@/lib/csv-utils';
 import { uploadFile } from '@/lib/file-upload';
+import { findAssetsByFilenames } from '@/lib/repositories/assetRepository';
 import { noCache } from '@/lib/api-response';
 import { randomUUID } from 'crypto';
 import type { CollectionField } from '@/types';
 
-/**
- * Download a file from a URL and upload it to the asset manager
- * Returns the asset ID if successful, null otherwise
- */
-async function downloadAndUploadAsset(
-  url: string,
-  fieldType: string
-): Promise<string | null> {
+interface UploadedAsset {
+  id: string;
+  publicUrl: string;
+}
+
+/** Extract the base filename (no extension) from a URL. */
+function extractFilenameFromUrl(url: string): string {
   try {
-    // Fetch the file from the URL
+    const urlPath = new URL(url).pathname;
+    const urlFilename = urlPath.split('/').pop();
+    if (urlFilename && urlFilename.includes('.')) {
+      const decoded = decodeURIComponent(urlFilename);
+      return decoded.replace(/\.[^/.]+$/, '');
+    }
+  } catch { /* ignore */ }
+  return '';
+}
+
+/** Download a file from a URL and upload it to the asset manager. */
+async function downloadAndUploadAsset(url: string): Promise<UploadedAsset | null> {
+  try {
     const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Ycode-CSV-Import/1.0',
-      },
+      headers: { 'User-Agent': 'Ycode-CSV-Import/1.0' },
     });
 
     if (!response.ok) {
@@ -47,26 +59,21 @@ async function downloadAndUploadAsset(
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     const blob = await response.blob();
 
-    // Extract filename from URL or generate one
-    let filename = 'imported-file';
+    let filename = '';
     try {
       const urlPath = new URL(url).pathname;
       const urlFilename = urlPath.split('/').pop();
       if (urlFilename && urlFilename.includes('.')) {
-        filename = urlFilename;
-      } else {
-        // Generate filename based on content type
-        const ext = contentType.split('/')[1]?.split(';')[0] || 'bin';
-        filename = `imported-${Date.now()}.${ext}`;
+        filename = decodeURIComponent(urlFilename);
       }
-    } catch {
-      // Keep default filename
+    } catch { /* ignore */ }
+
+    if (!filename) {
+      const ext = contentType.split('/')[1]?.split(';')[0] || 'bin';
+      filename = `imported-${Date.now()}.${ext}`;
     }
 
-    // Create a File object from the blob
     const file = new File([blob], filename, { type: contentType });
-
-    // Upload to asset manager
     const asset = await uploadFile(file, 'csv-import');
 
     if (!asset) {
@@ -74,7 +81,7 @@ async function downloadAndUploadAsset(
       return null;
     }
 
-    return asset.id;
+    return { id: asset.id, publicUrl: asset.public_url || url };
   } catch (error) {
     console.error(`Error downloading/uploading asset from URL: ${url}`, error);
     return null;
@@ -85,7 +92,8 @@ async function downloadAndUploadAsset(
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE_DEFAULT = 50;
+const BATCH_SIZE_WITH_ASSETS = 10;
 
 interface PreparedValue {
   item_id: string;
@@ -299,9 +307,16 @@ export async function POST(request: NextRequest) {
     // Get max ID for auto-increment (1 query)
     let currentMaxId = await getMaxIdValue(importJob.collection_id, false);
 
+    // Use smaller batches when asset downloads are needed (slower per row)
+    const mappedFieldIds = new Set(Object.values(importJob.column_mapping).filter(Boolean));
+    const hasAssetFields = fields.some(f =>
+      mappedFieldIds.has(f.id) && (isAssetFieldType(f.type) || f.type === 'rich_text')
+    );
+    const batchSize = hasAssetFields ? BATCH_SIZE_WITH_ASSETS : BATCH_SIZE_DEFAULT;
+
     // Calculate which rows to process
     const startIndex = importJob.processed_rows;
-    const endIndex = Math.min(startIndex + BATCH_SIZE, importJob.total_rows);
+    const endIndex = Math.min(startIndex + batchSize, importJob.total_rows);
     const rowsToProcess = importJob.csv_data.slice(startIndex, endIndex);
 
     const errors: string[] = [...(importJob.errors || [])];
@@ -330,50 +345,107 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- Phase 1.5: Process pending assets in parallel (download URLs and upload to asset manager) ---
-    // Collect all pending assets with their row context
-    const allPendingAssets: Array<{
-      row: PreparedRow;
-      asset: PendingAssetValue;
-    }> = [];
-
+    // --- Phase 1.5 & 1.6: Collect ALL asset URLs (asset fields + rich-text images) ---
+    const allPendingAssets: Array<{ row: PreparedRow; asset: PendingAssetValue }> = [];
     for (const row of preparedRows) {
       for (const asset of row.pendingAssets) {
         allPendingAssets.push({ row, asset });
       }
     }
 
-    if (allPendingAssets.length > 0) {
-      // Process assets in parallel with concurrency limit
-      const ASSET_CONCURRENCY = 5;
-      for (let i = 0; i < allPendingAssets.length; i += ASSET_CONCURRENCY) {
-        const batch = allPendingAssets.slice(i, i + ASSET_CONCURRENCY);
+    const richTextFields = new Set(
+      fields.filter(f => f.type === 'rich_text').map(f => f.id)
+    );
+    const richTextImageUrls = new Set<string>();
+    if (richTextFields.size > 0) {
+      for (const row of preparedRows) {
+        for (const val of row.values) {
+          if (!val.value || !richTextFields.has(val.field_id)) continue;
+          for (const ref of extractRichTextImageUrls(val.value)) {
+            richTextImageUrls.add(ref.src);
+          }
+        }
+      }
+    }
 
+    // Merge all unique URLs from both asset fields and rich-text images
+    const allUniqueUrls = new Set([
+      ...allPendingAssets.map(a => a.asset.url),
+      ...richTextImageUrls,
+    ]);
+
+    if (allUniqueUrls.size > 0) {
+      // 1) Extract filenames from all URLs and batch-query existing assets (1 DB query)
+      const urlToFilename = new Map<string, string>();
+      const filenamesToCheck: string[] = [];
+      for (const url of allUniqueUrls) {
+        const baseName = extractFilenameFromUrl(url);
+        if (baseName) {
+          urlToFilename.set(url, baseName);
+          filenamesToCheck.push(baseName);
+        }
+      }
+
+      const existingAssets = await findAssetsByFilenames(filenamesToCheck);
+
+      // 2) Resolve URLs: reuse existing assets or mark for download
+      const urlToUploadedAsset = new Map<string, UploadedAsset>();
+      const urlsToDownload: string[] = [];
+
+      for (const url of allUniqueUrls) {
+        const baseName = urlToFilename.get(url);
+        const existing = baseName ? existingAssets[baseName] : null;
+        if (existing) {
+          urlToUploadedAsset.set(url, { id: existing.id, publicUrl: existing.public_url || url });
+        } else {
+          urlsToDownload.push(url);
+        }
+      }
+
+      // 3) Download + upload only the URLs not already in the DB (parallel, batched)
+      const ASSET_CONCURRENCY = 5;
+      for (let i = 0; i < urlsToDownload.length; i += ASSET_CONCURRENCY) {
+        const batch = urlsToDownload.slice(i, i + ASSET_CONCURRENCY);
         const results = await Promise.allSettled(
-          batch.map(async ({ row, asset }) => {
-            const assetId = await downloadAndUploadAsset(asset.url, asset.fieldType);
-            return { row, asset, assetId };
+          batch.map(async (url) => {
+            const uploaded = await downloadAndUploadAsset(url);
+            return { url, uploaded };
           })
         );
-
-        // Process results
         for (const result of results) {
-          if (result.status === 'fulfilled') {
-            const { row, asset, assetId } = result.value;
-            if (assetId) {
-              row.values[asset.index].value = assetId;
-            } else {
-              errors.push(
-                `Row ${row.rowNumber}: failed to import ${asset.fieldType} from URL "${truncateValue(asset.url)}", skipped`
-              );
+          if (result.status === 'fulfilled' && result.value.uploaded) {
+            urlToUploadedAsset.set(result.value.url, result.value.uploaded);
+          }
+        }
+      }
+
+      // 4) Assign asset IDs back to asset field values
+      for (const { row, asset } of allPendingAssets) {
+        const uploaded = urlToUploadedAsset.get(asset.url);
+        if (uploaded) {
+          row.values[asset.index].value = uploaded.id;
+        } else {
+          errors.push(
+            `Row ${row.rowNumber}: failed to import ${asset.fieldType} from URL "${truncateValue(asset.url)}", skipped`
+          );
+        }
+      }
+
+      // 5) Replace image URLs in rich-text field values
+      if (richTextImageUrls.size > 0) {
+        const rtUrlToAsset = new Map<string, { assetId: string; publicUrl: string }>();
+        for (const url of richTextImageUrls) {
+          const uploaded = urlToUploadedAsset.get(url);
+          if (uploaded) {
+            rtUrlToAsset.set(url, { assetId: uploaded.id, publicUrl: uploaded.publicUrl });
+          }
+        }
+        if (rtUrlToAsset.size > 0) {
+          for (const row of preparedRows) {
+            for (const val of row.values) {
+              if (!val.value || !richTextFields.has(val.field_id)) continue;
+              val.value = replaceRichTextImageUrls(val.value, rtUrlToAsset);
             }
-          } else {
-            // Promise rejected - find the corresponding asset info from the batch
-            const batchIndex = results.indexOf(result);
-            const { row, asset } = batch[batchIndex];
-            errors.push(
-              `Row ${row.rowNumber}: error importing ${asset.fieldType} from URL "${truncateValue(asset.url)}" — ${getErrorMessage(result.reason)}`
-            );
           }
         }
       }

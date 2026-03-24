@@ -571,10 +571,14 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
     }));
 
     try {
-      const response = await collectionsApi.getItems(collectionId, { page, limit, sortBy, sortOrder });
+      const response = await collectionsApi.getItems(collectionId, { page, limit, sortBy, sortOrder, includeAssets: true });
 
       if (response.error) {
         throw new Error(response.error);
+      }
+
+      if (response.data?.referencedAssets?.length) {
+        useAssetsStore.getState().addAssetsToCache(response.data.referencedAssets);
       }
 
       set(state => ({
@@ -916,10 +920,14 @@ export const useCollectionsStore = create<CollectionsStore>((set, get) => ({
     set({ isLoading: true, error: null });
 
     try {
-      const response = await collectionsApi.searchItems(collectionId, query, { page, limit, sortBy, sortOrder });
+      const response = await collectionsApi.searchItems(collectionId, query, { page, limit, sortBy, sortOrder, includeAssets: true });
 
       if (response.error) {
         throw new Error(response.error);
+      }
+
+      if (response.data?.referencedAssets?.length) {
+        useAssetsStore.getState().addAssetsToCache(response.data.referencedAssets);
       }
 
       set(state => ({

@@ -84,9 +84,9 @@ export function CSVImportDialog({
   // Lock to prevent overlapping process requests
   const processingLockRef = useRef<boolean>(false);
 
-  // Filter out auto-generated fields that shouldn't be mapped
+  // Filter out auto-generated and computed fields that shouldn't be mapped
   const mappableFields = fields.filter(
-    f => !AUTO_FIELD_KEYS.includes(f.key as typeof AUTO_FIELD_KEYS[number])
+    f => !AUTO_FIELD_KEYS.includes(f.key as typeof AUTO_FIELD_KEYS[number]) && !f.is_computed
   );
 
   // Reset state when dialog closes
@@ -109,11 +109,9 @@ export function CSVImportDialog({
     processingLockRef.current = false;
   }, []);
 
-  // Handle close
+  // Handle close — blocked while import is in progress
   const handleClose = () => {
-    if (importing && step === 'progress') {
-      // Allow closing during import - it continues in background
-    }
+    if (importing && step === 'progress') return;
     resetState();
     onOpenChange(false);
   };
@@ -288,6 +286,7 @@ export function CSVImportDialog({
           }
           setImporting(false);
           setStep('complete');
+          onImportComplete?.();
           return;
         }
 
@@ -322,8 +321,10 @@ export function CSVImportDialog({
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent
-        showCloseButton={step !== 'progress' || !importing}
+        showCloseButton={!importing}
         className="sm:max-w-lg"
+        onInteractOutside={(e) => { if (importing) e.preventDefault(); }}
+        onEscapeKeyDown={(e) => { if (importing) e.preventDefault(); }}
       >
         {/* Step 1: Upload */}
         {step === 'upload' && (
@@ -430,7 +431,7 @@ export function CSVImportDialog({
               </div>
             )}
 
-            <DialogFooter className="mt-6 sm:justify-between">
+            <DialogFooter className="sm:justify-between">
               <Button variant="secondary" onClick={() => setStep('upload')}>
                 Back
               </Button>
@@ -475,8 +476,8 @@ export function CSVImportDialog({
               </div>
 
               <p className="text-xs text-muted-foreground">
-                The import will run in the background. You can close this dialog and
-                the import will continue processing.
+                Once the import starts, please do not close this dialog or
+                reload the page as it will stop the importing process.
               </p>
             </div>
 
@@ -486,7 +487,7 @@ export function CSVImportDialog({
               </div>
             )}
 
-            <DialogFooter className="mt-6 sm:justify-between">
+            <DialogFooter className="sm:justify-between">
               <Button
                 variant="secondary"
                 onClick={() => setStep('mapping')}
@@ -508,7 +509,7 @@ export function CSVImportDialog({
             <DialogHeader>
               <DialogTitle>Importing...</DialogTitle>
               <DialogDescription>
-                Import is running in the background.
+                Please do not close this dialog or reload the page.
               </DialogDescription>
             </DialogHeader>
 
@@ -520,10 +521,17 @@ export function CSVImportDialog({
                   <span className="font-medium">{progressPercent}%</span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-input">
-                  <div
-                    className="h-full bg-secondary transition-all duration-300"
-                    style={{ width: `${progressPercent}%` }}
-                  />
+                  {progressPercent === 0 ? (
+                    <div
+                      className="h-full w-1/3 rounded-full bg-secondary"
+                      style={{ animation: 'indeterminate 1.5s ease-in-out infinite' }}
+                    />
+                  ) : (
+                    <div
+                      className="h-full bg-secondary transition-all duration-300"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -543,24 +551,14 @@ export function CSVImportDialog({
                   )}
                 </dl>
               )}
-
-              <p className="text-xs text-muted-foreground">
-                You can close this dialog. The import will continue in the background.
-              </p>
             </div>
-
-            <DialogFooter className="mt-6">
-              <Button variant="secondary" onClick={handleClose}>
-                Close
-              </Button>
-            </DialogFooter>
           </>
         )}
 
         {/* Step 5: Complete */}
         {step === 'complete' && (
           <>
-            <div className="py-8 text-center">
+            <div className="pt-8 text-center">
               <Empty>
                 <EmptyMedia variant="icon">
                   <Icon
