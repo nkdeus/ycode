@@ -361,11 +361,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     const isPageOrLayersRoute = routeType === 'page' || routeType === 'layers';
     const isComponentRoute = routeType === 'component';
 
-    if ((isPageOrLayersRoute || isComponentRoute) && !urlState.isEditing && hasInitializedLayerFromUrlRef.current) {
-      const layerParam = selectedLayerId || undefined;
+    if ((isPageOrLayersRoute || isComponentRoute) && !urlState.isEditing && hasInitializedLayerFromUrlRef.current && selectedLayerId) {
       // Only update if the layer has actually changed from URL
-      if (urlState.layerId !== layerParam) {
-        updateQueryParams({ layer: layerParam });
+      if (urlState.layerId !== selectedLayerId) {
+        updateQueryParams({ layer: selectedLayerId });
       }
     }
   }, [selectedLayerId, routeType, updateQueryParams, urlState.layerId, urlState.isEditing, justExitedEditMode]);
