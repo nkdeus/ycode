@@ -46,7 +46,32 @@
       "Bash(git commit:*)",
       "Bash(npm run:*)",
       "Bash(npx cross-env:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(find /c/dev/ycode-fork/ycode -name *README* -o -name *SETUP* -o -name *DEVELOPMENT* -o -name .env*)",
+      "Bash(curl:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(claude mcp:*)",
+      "mcp__ycode__list_pages",
+      "mcp__ycode__get_layers",
+      "mcp__ycode__delete_layer",
+      "mcp__ycode__add_layer",
+      "mcp__ycode__update_layer_text",
+      "mcp__ycode__list_assets",
+      "mcp__ycode__list_color_variables",
+      "mcp__ycode__list_fonts",
+      "mcp__ycode__upload_asset",
+      "mcp__ycode__update_layer_design",
+      "mcp__ycode__update_layer_image",
+      "mcp__ycode__create_color_variable",
+      "mcp__ycode__update_layer_settings",
+      "mcp__ycode__batch_operations",
+      "mcp__ycode__create_collection",
+      "mcp__ycode__add_collection_field",
+      "mcp__ycode__create_collection_item"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "ycode"
+  ]
 }

@@ -1,3 +1,7 @@
+# MCP config (contains tokens)
+.mcp.json
+.claude/mcp.json
+
 # dependencies
 /node_modules
 /.pnp
