@@ -38,7 +38,15 @@
       "Bash(node -e \"var cls = 'pt-[200px]'; var esc = cls.replace\\(/\\\\[/g, String.fromCharCode\\(92\\)+'['\\).replace\\(/\\\\]/g, String.fromCharCode\\(92\\)+']'\\); console.log\\('Escaped: ' + esc\\);\")",
       "Bash(npx tsc:*)",
       "Bash(node -e \"\nconst pkg = require\\('eva-css-for-tailwind'\\);\n// Check what resolveConfig returns with defaults\nconst config = pkg.resolveConfig\\({}\\);\nconsole.log\\('Default config:', JSON.stringify\\(config, null, 2\\)\\);\n\")",
-      "Bash(node -e \"\nconst { generateClamp, resolveConfig } = require\\('eva-css-for-tailwind'\\);\n// Check function signature\nconsole.log\\(generateClamp.toString\\(\\).slice\\(0, 500\\)\\);\n\")"
+      "Bash(node -e \"\nconst { generateClamp, resolveConfig } = require\\('eva-css-for-tailwind'\\);\n// Check function signature\nconsole.log\\(generateClamp.toString\\(\\).slice\\(0, 500\\)\\);\n\")",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)",
+      "Bash(npm install:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run:*)",
+      "Bash(npx cross-env:*)",
+      "Bash(node:*)"
     ]
   }
 }
