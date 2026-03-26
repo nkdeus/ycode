@@ -59,9 +59,9 @@ import RichTextEditorSheet from './RichTextEditorSheet';
 import { buildLocalizedSlugPath, buildLocalizedDynamicPageUrl } from '@/lib/page-utils';
 import { getTranslationValue } from '@/lib/localisation-utils';
 import { cn } from '@/lib/utils';
-import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps } from '@/lib/layer-utils';
+import { getCollectionVariable, canDeleteLayer, findLayerById, findParentCollectionLayer, canLayerHaveLink, updateLayerProps, removeRichTextSublayer } from '@/lib/layer-utils';
 import { CANVAS_BORDER, CANVAS_PADDING } from '@/lib/canvas-utils';
-import { buildFieldGroupsForLayer, hasFieldsMatching, flattenFieldGroups, DISPLAYABLE_FIELD_TYPES } from '@/lib/collection-field-utils';
+import { buildFieldGroupsForLayer, flattenFieldGroups, filterFieldGroupsByType, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { getRichTextValue } from '@/lib/tiptap-utils';
 import { DropContainerIndicator, DropLineIndicator } from '@/components/DropIndicators';
 import { DragCaptureOverlay } from '@/components/DragCaptureOverlay';
@@ -109,6 +109,83 @@ const viewportSizes: Record<ViewportMode, { width: string; label: string; icon: 
   tablet: { width: '768px', label: 'Tablet', icon: '📱' },
   mobile: { width: '375px', label: 'Mobile', icon: '📱' },
 };
+
+interface ViewportZoomControlsProps {
+  viewportMode: ViewportMode;
+  zoom: number;
+  onViewportChange: (mode: ViewportMode) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onResetZoom: () => void;
+  onZoomToFit: () => void;
+  onAutofit: () => void;
+}
+
+/** Shared viewport toggle + zoom dropdown used in both the canvas and preview toolbars. */
+function ViewportZoomControls({
+  viewportMode,
+  zoom,
+  onViewportChange,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  onZoomToFit,
+  onAutofit,
+}: ViewportZoomControlsProps) {
+  return (
+    <div className="flex justify-center gap-2">
+      <Tabs value={viewportMode} onValueChange={(v) => onViewportChange(v as ViewportMode)}>
+        <TabsList className="w-50">
+          <TabsTrigger value="desktop" title="Desktop View">Desktop</TabsTrigger>
+          <TabsTrigger value="tablet" title="Tablet View">Tablet</TabsTrigger>
+          <TabsTrigger value="mobile" title="Mobile View">Phone</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="input"
+            size="sm"
+            className="w-18"
+          >
+            <span className="flex-1 text-center">{Math.round(zoom)}%</span>
+            <Icon name="chevronDown" className="size-2.5! opacity-50" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          side="bottom"
+          sideOffset={4}
+          avoidCollisions={false}
+          collisionPadding={0}
+          className="max-h-75! w-38"
+        >
+          <DropdownMenuItem onClick={onZoomIn}>
+            Zoom in
+            <DropdownMenuShortcut>⌘+</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onZoomOut}>
+            Zoom out
+            <DropdownMenuShortcut>⌘-</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onResetZoom}>
+            Zoom to 100%
+            <DropdownMenuShortcut>⌘0</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onZoomToFit}>
+            Fit height
+            <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={onAutofit}>
+            Fit width
+            <DropdownMenuShortcut>⌘2</DropdownMenuShortcut>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
 
 // Component editing canvas sizing
 const COMPONENT_CANVAS_PADDING = 0;
@@ -503,6 +580,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const [showAddBlockPanel, setShowAddBlockPanel] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [previewContentHeight, setPreviewContentHeight] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // State for iframe element (for SelectionOverlay)
@@ -522,8 +601,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
   // Track whether zoom calculation is ready (prevents flash of wrong zoom on initial load)
   const [isCanvasReady, setIsCanvasReady] = useState(false);
 
-  // Optimize store subscriptions - use selective selectors
-  const draftsByPageId = usePagesStore((state) => state.draftsByPageId);
+  // Optimize store subscriptions - use selective selectors (scoped to current page only)
+  const currentDraft = usePagesStore((state) => currentPageId ? state.draftsByPageId[currentPageId] : null);
   const addLayerFromTemplate = usePagesStore((state) => state.addLayerFromTemplate);
   const updateLayer = usePagesStore((state) => state.updateLayer);
   const deleteLayer = usePagesStore((state) => state.deleteLayer);
@@ -537,7 +616,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const getReturnDestination = useEditorStore((state) => state.getReturnDestination);
   const clearSelection = useEditorStore((state) => state.clearSelection);
   const setActiveSidebarTab = useEditorStore((state) => state.setActiveSidebarTab);
-  const setActiveTextStyleKey = useEditorStore((state) => state.setActiveTextStyleKey);
+  const selectLayerWithSublayer = useEditorStore((state) => state.selectLayerWithSublayer);
 
   const selectedLocaleId = useLocalisationStore((state) => state.selectedLocaleId);
   const getSelectedLocale = useLocalisationStore((state) => state.getSelectedLocale);
@@ -551,9 +630,13 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const hoveredLayerId = useEditorStore((state) => state.hoveredLayerId);
   const setHoveredLayerId = useEditorStore((state) => state.setHoveredLayerId);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const activeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
   const activeInteractionTriggerLayerId = useEditorStore((state) => state.activeInteractionTriggerLayerId);
   const richTextSheetLayerId = useEditorStore((state) => state.richTextSheetLayerId);
   const closeRichTextSheet = useEditorStore((state) => state.closeRichTextSheet);
+  const activeSublayerIndex = useEditorStore((state) => state.activeSublayerIndex);
+  const setActiveSublayerIndex = useEditorStore((state) => state.setActiveSublayerIndex);
+  const activeListItemIndex = useEditorStore((state) => state.activeListItemIndex);
   const elementPicker = useEditorStore((state) => state.elementPicker);
   const stopElementPicker = useEditorStore((state) => state.stopElementPicker);
   const assets = useAssetsStore((state) => state.assets);
@@ -571,8 +654,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const toggleStrike = useCanvasTextEditorStore((state) => state.toggleStrike);
   const toggleSubscript = useCanvasTextEditorStore((state) => state.toggleSubscript);
   const toggleSuperscript = useCanvasTextEditorStore((state) => state.toggleSuperscript);
-  const toggleBulletList = useCanvasTextEditorStore((state) => state.toggleBulletList);
-  const toggleOrderedList = useCanvasTextEditorStore((state) => state.toggleOrderedList);
   const setHeading = useCanvasTextEditorStore((state) => state.setHeading);
   const focusEditor = useCanvasTextEditorStore((state) => state.focusEditor);
   const requestFinishEditing = useCanvasTextEditorStore((state) => state.requestFinish);
@@ -600,10 +681,10 @@ const CenterCanvas = React.memo(function CenterCanvas({
   // Load draft when page changes (ensure draft exists before rendering)
   const loadDraft = usePagesStore((state) => state.loadDraft);
   useEffect(() => {
-    if (currentPageId && !draftsByPageId[currentPageId]) {
+    if (currentPageId && !currentDraft) {
       loadDraft(currentPageId);
     }
-  }, [currentPageId, loadDraft, draftsByPageId]);
+  }, [currentPageId, loadDraft, currentDraft]);
 
   // Reset content height when page changes to force Canvas to recalculate
   useEffect(() => {
@@ -625,7 +706,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const referencedItems = useCollectionLayerStore((state) => state.referencedItems);
   const fetchReferencedCollectionItems = useCollectionLayerStore((state) => state.fetchReferencedCollectionItems);
 
-  const { routeType, urlState, navigateToLayers, navigateToPage, navigateToPageEdit, updateQueryParams } = useEditorUrl();
+  const { urlState, navigateToLayers, navigateToPage, navigateToPageEdit, updateQueryParams } = useEditorUrl();
   const components = useComponentsStore((state) => state.components);
   const componentDrafts = useComponentsStore((state) => state.componentDrafts);
   const [collectionItems, setCollectionItems] = useState<Array<{ id: string; label: string }>>([]);
@@ -724,6 +805,27 @@ const CenterCanvas = React.memo(function CenterCanvas({
     minZoom: 10,
     maxZoom: 1000,
     zoomStep: 10,
+    shortcutsEnabled: !isPreviewMode,
+  });
+
+  // Independent zoom for the preview (second useZoom instance, active only in preview mode)
+  const previewContentWidth = parseInt(viewportSizes[viewportMode].width);
+  const {
+    zoom: previewZoom,
+    zoomIn: previewZoomIn,
+    zoomOut: previewZoomOut,
+    resetZoom: previewResetZoom,
+    zoomToFit: previewZoomToFit,
+    autofit: previewAutofit,
+  } = useZoom({
+    containerRef: previewContainerRef,
+    contentWidth: previewContentWidth,
+    contentHeight: previewContentHeight || previewContentWidth,
+    minZoom: 10,
+    maxZoom: 1000,
+    zoomStep: 10,
+    shortcutsEnabled: isPreviewMode,
+    iframeRef,
   });
 
   // Determine if we should center (zoomed out beyond "zoom to fit" level)
@@ -754,33 +856,118 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
       // Small delay to ensure container dimensions are updated
       setTimeout(() => {
-        autofit();
+        if (isPreviewMode) {
+          previewAutofit();
+        } else {
+          autofit();
+        }
       }, 50);
+
       prevViewportMode.current = viewportMode;
     }
-  }, [viewportMode, autofit]);
+  }, [viewportMode, autofit, isPreviewMode, previewAutofit]);
 
-  // Recalculate zoom when content height becomes ready in preview mode
-  const hasRecalculatedForContent = useRef(false);
+  // Scroll canvas to selected element if it's off-screen
+  const prevCanvasLayerIdRef = useRef<string | null>(null);
+  const isInitialScrollRef = useRef(true);
+
+  const scrollCanvasToLayer = useCallback((layerId: string, smooth: boolean, force = false) => {
+    const scrollEl = scrollContainerRef.current;
+    if (!canvasIframeElement || !scrollEl) return;
+
+    const iframeDoc = canvasIframeElement.contentDocument;
+    if (!iframeDoc) return;
+
+    const el = iframeDoc.querySelector(`[data-layer-id="${layerId}"]`) as HTMLElement;
+    if (!el) return;
+
+    const elRect = el.getBoundingClientRect();
+    const iframeRect = canvasIframeElement.getBoundingClientRect();
+    const zoomScale = zoom / 100;
+    const elTopInScroll = iframeRect.top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop + elRect.top * zoomScale;
+    const elBottomInScroll = elTopInScroll + elRect.height * zoomScale;
+    const viewTop = scrollEl.scrollTop;
+    const viewBottom = scrollEl.scrollTop + scrollEl.clientHeight;
+
+    if (!force && elTopInScroll >= viewTop && elBottomInScroll <= viewBottom) return;
+
+    const elScaledHeight = elRect.height * zoomScale;
+    const fitsInView = elScaledHeight <= scrollEl.clientHeight;
+    const targetScroll = fitsInView
+      ? elTopInScroll - (scrollEl.clientHeight / 2) + (elScaledHeight / 2)
+      : elTopInScroll;
+    scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: smooth ? 'smooth' : 'auto' });
+  }, [canvasIframeElement, zoom]);
+
+  const scrollCanvasToLayerRef = useRef(scrollCanvasToLayer);
+  scrollCanvasToLayerRef.current = scrollCanvasToLayer;
+
   useEffect(() => {
-    // In preview mode, wait for meaningful content height then recalculate once
-    if (isPreviewMode && !hasRecalculatedForContent.current && iframeContentHeight > 600) {
-      hasRecalculatedForContent.current = true;
-      // Delay to ensure everything is ready
-      setTimeout(() => {
-        if (zoomMode === 'autofit') {
-          autofit();
-        } else if (zoomMode === 'fit') {
-          zoomToFit();
-        }
-      }, 150);
+    if (!selectedLayerId) {
+      prevCanvasLayerIdRef.current = null;
+      return;
     }
-  }, [isPreviewMode, iframeContentHeight, zoomMode, autofit, zoomToFit]);
 
-  // Reset flag when preview mode changes
+    if (!canvasIframeElement || !isCanvasReady) return;
+
+    if (prevCanvasLayerIdRef.current === selectedLayerId) return;
+    prevCanvasLayerIdRef.current = selectedLayerId;
+
+    const isInitial = isInitialScrollRef.current;
+    isInitialScrollRef.current = false;
+
+    let attempts = 0;
+    const maxAttempts = 20;
+    const delay = isInitial ? 200 : 50;
+
+    const tryScroll = () => {
+      const iframeDoc = canvasIframeElement.contentDocument;
+      const el = iframeDoc?.querySelector(`[data-layer-id="${selectedLayerId}"]`) as HTMLElement | null;
+      if (!el) {
+        attempts++;
+        if (attempts < maxAttempts) {
+          timeoutId = window.setTimeout(tryScroll, 100);
+        }
+        return;
+      }
+      scrollCanvasToLayer(selectedLayerId, !isInitial);
+    };
+
+    let timeoutId = window.setTimeout(tryScroll, delay);
+
+    return () => clearTimeout(timeoutId);
+  }, [selectedLayerId, canvasIframeElement, isCanvasReady, scrollCanvasToLayer]);
+
+  // Re-scroll when content height changes during initial load (images loading shifts layout)
+  const canvasReadyTimeRef = useRef<number | null>(null);
   useEffect(() => {
-    hasRecalculatedForContent.current = false;
-  }, [isPreviewMode]);
+    if (isCanvasReady && !canvasReadyTimeRef.current) {
+      canvasReadyTimeRef.current = Date.now();
+    }
+  }, [isCanvasReady]);
+
+  useEffect(() => {
+    if (!selectedLayerId || !canvasIframeElement || !isCanvasReady || !reportedContentHeight) return;
+
+    const readyTime = canvasReadyTimeRef.current;
+    if (!readyTime || Date.now() - readyTime > 5000) return;
+
+    const timeout = setTimeout(() => {
+      scrollCanvasToLayer(selectedLayerId, false, true);
+    }, 100);
+    return () => clearTimeout(timeout);
+  }, [reportedContentHeight, selectedLayerId, canvasIframeElement, isCanvasReady, scrollCanvasToLayer]);
+
+  // Scroll to selected layer after breakpoint change (uses ref to avoid stale zoom closure)
+  useEffect(() => {
+    if (isPreviewMode || !selectedLayerId || !canvasIframeElement || !isCanvasReady) return;
+
+    const timeout = setTimeout(() => {
+      scrollCanvasToLayerRef.current(selectedLayerId, true, true);
+    }, 300);
+    return () => clearTimeout(timeout);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewportMode]);
 
   // Track container dimensions for dynamic alignment
   useEffect(() => {
@@ -820,16 +1007,15 @@ const CenterCanvas = React.memo(function CenterCanvas({
       return [];
     }
 
-    const draft = draftsByPageId[currentPageId];
-    return draft ? draft.layers : [];
-  }, [editingComponentId, componentDrafts, currentPageId, draftsByPageId]);
+    return currentDraft ? currentDraft.layers : [];
+  }, [editingComponentId, componentDrafts, currentPageId, currentDraft]);
 
   // Check if we're waiting for a draft to load (page selected but no draft yet)
   const isDraftLoading = useMemo(() => {
     if (editingComponentId) return false;
     if (!currentPageId) return false;
-    return !draftsByPageId[currentPageId];
-  }, [editingComponentId, currentPageId, draftsByPageId]);
+    return !currentDraft;
+  }, [editingComponentId, currentPageId, currentDraft]);
 
   // Check if canvas is empty (only Body layer with no children)
   const isCanvasEmpty = useMemo(() => {
@@ -860,7 +1046,10 @@ const CenterCanvas = React.memo(function CenterCanvas({
       layerList.forEach((layer) => {
         const collectionVariable = getCollectionVariable(layer);
         if (collectionVariable?.id) {
-          settings.push(`${layer.id}:${collectionVariable.id}:${collectionVariable.sort_by ?? ''}:${collectionVariable.sort_order ?? ''}:${collectionVariable.limit ?? ''}:${collectionVariable.offset ?? ''}`);
+          const opts = layer.settings?.optionsSource;
+          const sortBy = opts?.sortFieldId || collectionVariable.sort_by;
+          const sortOrder = opts?.sortOrder || collectionVariable.sort_order;
+          settings.push(`${layer.id}:${collectionVariable.id}:${sortBy ?? ''}:${sortOrder ?? ''}:${collectionVariable.limit ?? ''}:${collectionVariable.offset ?? ''}`);
         }
         if (layer.children && layer.children.length > 0) {
           settings.push(...extractCollectionSettings(layer.children));
@@ -886,11 +1075,14 @@ const CenterCanvas = React.memo(function CenterCanvas({
         layerList.forEach((layer) => {
           const collectionVariable = getCollectionVariable(layer);
           if (collectionVariable?.id) {
+            const opts = layer.settings?.optionsSource;
+            const sortBy = opts?.sortFieldId || collectionVariable.sort_by;
+            const sortOrder = opts?.sortOrder || collectionVariable.sort_order;
             fetchLayerData(
               layer.id,
               collectionVariable.id,
-              collectionVariable.sort_by,
-              collectionVariable.sort_order,
+              sortBy,
+              sortOrder,
               collectionVariable.limit,
               collectionVariable.offset
             );
@@ -935,9 +1127,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     // First, check if we have an optimistically updated item in the draft
     if (currentPageId) {
-      const draft = draftsByPageId[currentPageId];
-      if (draft && (draft as any).collectionItem) {
-        return (draft as any).collectionItem;
+      if (currentDraft && (currentDraft as any).collectionItem) {
+        return (currentDraft as any).collectionItem;
       }
     }
 
@@ -948,7 +1139,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     }
     const itemsForCollection = collectionItemsFromStore[collectionId] || [];
     return itemsForCollection.find((item) => item.id === currentPageCollectionItemId) || null;
-  }, [currentPage, currentPageId, currentPageCollectionItemId, collectionItemsFromStore, draftsByPageId]);
+  }, [currentPage, currentPageId, currentPageCollectionItemId, collectionItemsFromStore, currentDraft]);
 
   // Page collection fields (used for Canvas props and reference loading)
   const pageCollectionFields = useMemo(() => {
@@ -971,29 +1162,34 @@ const CenterCanvas = React.memo(function CenterCanvas({
     if (editingComponentId) {
       layersToSearch = componentDrafts[editingComponentId] || [];
     } else {
-      const draft = draftsByPageId[currentPageId];
-      layersToSearch = draft ? draft.layers : [];
+      layersToSearch = currentDraft ? currentDraft.layers : [];
     }
 
     if (!layersToSearch.length) return null;
 
     // Find parent collection layer
     return findParentCollectionLayer(layersToSearch, editingLayerId);
-  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, draftsByPageId]);
+  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft]);
 
   // Build field groups for the canvas text editor's inline variable selection
+  // Components are page-agnostic, so exclude dynamic page-collection fields when editing a component
   const fieldGroups = useMemo(() => {
     if (!editingLayerId) return undefined;
     let layers: Layer[] = [];
     if (editingComponentId) {
       layers = componentDrafts[editingComponentId] || [];
     } else if (currentPageId) {
-      const draft = draftsByPageId[currentPageId];
-      layers = draft ? draft.layers : [];
+      layers = currentDraft ? currentDraft.layers : [];
     }
     if (!layers.length) return undefined;
-    return buildFieldGroupsForLayer(editingLayerId, layers, currentPage, collectionFieldsFromStore, collectionsFromStore);
-  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, draftsByPageId, currentPage, collectionFieldsFromStore, collectionsFromStore]);
+    const page = editingComponentId ? null : currentPage;
+    return buildFieldGroupsForLayer(editingLayerId, layers, page, collectionFieldsFromStore, collectionsFromStore);
+  }, [editingLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
+
+  const textFieldGroups = useMemo(
+    () => filterFieldGroupsByType(fieldGroups, SIMPLE_TEXT_FIELD_TYPES),
+    [fieldGroups],
+  );
 
   // Create assets map for Canvas (asset ID -> asset)
   const assetsMap = useMemo(() => {
@@ -1033,30 +1229,43 @@ const CenterCanvas = React.memo(function CenterCanvas({
     }
 
     if (!isPreviewMode) {
-      setSelectedLayerId(layerId);
       // Switch to Layers tab when a layer is clicked on canvas
       setActiveSidebarTab('layers');
 
-      // Detect if clicked on a text style element (bold, italic, etc.)
+      // Detect if clicked on a text style element or a richText sublayer block
+      let textStyleKey: string | null = null;
+      let blockIndex: number | null = null;
+      let listItemIndex: number | null = null;
+
       if (event) {
         let target = event.target as HTMLElement;
-        let textStyleKey: string | null = null;
 
-        // Walk up the DOM tree to find data-style attribute
+        // Walk up the DOM tree to find data-style, data-block-index, data-list-item-index
         while (target && target !== event.currentTarget) {
-          const styleAttr = target.getAttribute?.('data-style');
-          if (styleAttr) {
-            textStyleKey = styleAttr;
-            break;
+          if (!textStyleKey) {
+            const styleAttr = target.getAttribute?.('data-style');
+            if (styleAttr) textStyleKey = styleAttr;
+          }
+          if (listItemIndex === null) {
+            const listItemAttr = target.getAttribute?.('data-list-item-index');
+            if (listItemAttr !== null) listItemIndex = parseInt(listItemAttr, 10);
+          }
+          if (blockIndex === null) {
+            const blockAttr = target.getAttribute?.('data-block-index');
+            if (blockAttr !== null) blockIndex = parseInt(blockAttr, 10);
           }
           target = target.parentElement as HTMLElement;
         }
-
-        // Set the active text style key if found
-        setActiveTextStyleKey(textStyleKey);
       }
+
+      // Use atomic state update to prevent transient null activeTextStyleKey
+      selectLayerWithSublayer(layerId, {
+        textStyleKey,
+        sublayerIndex: Number.isFinite(blockIndex) ? blockIndex : null,
+        listItemIndex: Number.isFinite(listItemIndex) ? listItemIndex : null,
+      });
     }
-  }, [isPreviewMode, setSelectedLayerId, setActiveSidebarTab, setActiveTextStyleKey]);
+  }, [isPreviewMode, setActiveSidebarTab, selectLayerWithSublayer]);
 
   const handleCanvasLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
     if (editingComponentId) {
@@ -1071,12 +1280,23 @@ const CenterCanvas = React.memo(function CenterCanvas({
   const handleCanvasDeleteLayer = useCallback(() => {
     if (!selectedLayerId || !currentPageId) return;
 
+    // Handle sublayer deletion (remove TipTap block, not the whole layer)
+    if (activeSublayerIndex !== null) {
+      if (!currentDraft) return;
+      const richTextLayer = findLayerById(currentDraft.layers, selectedLayerId);
+      if (!richTextLayer) return;
+      const updates = removeRichTextSublayer(richTextLayer, activeSublayerIndex);
+      if (!updates) return;
+      updateLayer(currentPageId, selectedLayerId, updates);
+      setActiveSublayerIndex(null);
+      return;
+    }
+
     // Check if multi-select
     if (selectedLayerIds.length > 1) {
       // Check restrictions for all layers
-      const draft = draftsByPageId[currentPageId];
-      if (draft) {
-        const layersToCheck = selectedLayerIds.map(id => findLayerById(draft.layers, id)).filter(Boolean) as Layer[];
+      if (currentDraft) {
+        const layersToCheck = selectedLayerIds.map(id => findLayerById(currentDraft.layers, id)).filter(Boolean) as Layer[];
         const canDeleteAll = layersToCheck.every(layer => canDeleteLayer(layer));
 
         if (canDeleteAll) {
@@ -1086,9 +1306,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
       }
     } else {
       // Single layer deletion - check restrictions
-      const draft = draftsByPageId[currentPageId];
-      if (draft) {
-        const layer = findLayerById(draft.layers, selectedLayerId);
+      if (currentDraft) {
+        const layer = findLayerById(currentDraft.layers, selectedLayerId);
         if (!layer || !canDeleteLayer(layer)) {
           return;
         }
@@ -1096,16 +1315,15 @@ const CenterCanvas = React.memo(function CenterCanvas({
         setSelectedLayerId(null);
       }
     }
-  }, [selectedLayerId, currentPageId, selectedLayerIds, draftsByPageId, deleteLayers, clearSelection, deleteLayer, setSelectedLayerId]);
+  }, [selectedLayerId, currentPageId, selectedLayerIds, currentDraft, deleteLayers, clearSelection, deleteLayer, setSelectedLayerId, activeSublayerIndex, setActiveSublayerIndex, updateLayer]);
 
   const handleCanvasGapUpdate = useCallback((layerId: string, gapValue: string) => {
     if (!currentPageId) return;
 
     // Find the layer and update its gap class
-    const draft = draftsByPageId[currentPageId];
-    if (!draft) return;
+    if (!currentDraft) return;
 
-    const layer = findLayerById(draft.layers, layerId);
+    const layer = findLayerById(currentDraft.layers, layerId);
     if (!layer) return;
 
     // Get current classes
@@ -1119,22 +1337,23 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
     // Update the layer
     updateLayer(currentPageId, layerId, { classes: newClasses });
-  }, [currentPageId, draftsByPageId, updateLayer]);
+  }, [currentPageId, currentDraft, updateLayer]);
 
   // Rich text sheet for canvas double-click (layers with components/variables)
   // Build field groups using the sheet target layer (not the canvas text editor layer)
+  // Components are page-agnostic, so exclude dynamic page-collection fields when editing a component
   const richTextSheetFieldGroups = useMemo(() => {
     if (!richTextSheetLayerId || !currentPageId) return undefined;
     let layers: Layer[] = [];
     if (editingComponentId) {
       layers = componentDrafts[editingComponentId] || [];
     } else {
-      const draft = draftsByPageId[currentPageId];
-      layers = draft ? draft.layers : [];
+      layers = currentDraft ? currentDraft.layers : [];
     }
     if (!layers.length) return undefined;
-    return buildFieldGroupsForLayer(richTextSheetLayerId, layers, currentPage, collectionFieldsFromStore, collectionsFromStore);
-  }, [richTextSheetLayerId, editingComponentId, componentDrafts, currentPageId, draftsByPageId, currentPage, collectionFieldsFromStore, collectionsFromStore]);
+    const page = editingComponentId ? null : currentPage;
+    return buildFieldGroupsForLayer(richTextSheetLayerId, layers, page, collectionFieldsFromStore, collectionsFromStore);
+  }, [richTextSheetLayerId, editingComponentId, componentDrafts, currentPageId, currentDraft, currentPage, collectionFieldsFromStore, collectionsFromStore]);
 
   // Track the current value locally so the value prop always matches the editor's
   // internal state. This prevents the editor's sync effect from resetting content
@@ -1148,7 +1367,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     }
     const source = editingComponentId
       ? componentDrafts[editingComponentId]
-      : currentPageId ? draftsByPageId[currentPageId]?.layers : null;
+      : currentDraft?.layers ?? null;
     const layer = source ? findLayerById(source as Layer[], richTextSheetLayerId) : null;
     setRichTextSheetValue(getRichTextValue(layer?.variables));
   // Only re-derive when the sheet target layer changes, not on every draft update
@@ -1310,8 +1529,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     if (editingComponentId) {
       layersToSearch = componentDrafts[editingComponentId] || [];
     } else {
-      const draft = draftsByPageId[currentPageId];
-      layersToSearch = draft ? draft.layers : [];
+      layersToSearch = currentDraft ? currentDraft.layers : [];
     }
 
     if (!layersToSearch.length) return null;
@@ -1340,7 +1558,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
     if (selectedLayer?.name === 'slide') return null;
 
     return result;
-  }, [selectedLayerId, currentPageId, editingComponentId, componentDrafts, draftsByPageId]);
+  }, [selectedLayerId, currentPageId, editingComponentId, componentDrafts, currentDraft]);
 
   // Get selected layer name for drag preview
   const selectedLayerName = useMemo(() => {
@@ -1412,13 +1630,37 @@ const CenterCanvas = React.memo(function CenterCanvas({
     return `/ycode/preview${path === '/' ? '' : path}`;
   }, [currentPage, folders, currentPageCollectionItemId, collectionItemsFromStore, collectionFieldsFromStore, selectedLocale, localeTranslations]);
 
-  // Generate a stable preview key that changes when layers are actually modified
-  const previewKey = useMemo(() => {
-    // Use JSON.stringify of layer structure to detect changes
-    // This is more efficient than Date.now() which would refresh constantly
-    const layerHash = JSON.stringify(layers);
-    return `preview-${currentPageId}-${layerHash.length}`;
-  }, [currentPageId, layers]);
+  // Reload preview iframe every time preview mode opens (covers all change sources:
+  // layer edits, component updates, CMS, layer styles, color variables, etc.)
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  useEffect(() => {
+    if (!isPreviewMode || !previewUrl) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    setIsPreviewLoading(true);
+    iframe.src = previewUrl;
+  }, [isPreviewMode, previewUrl]);
+
+  // Autofit when entering preview mode (not on every breakpoint change)
+  const prevIsPreviewMode = useRef(false);
+  useEffect(() => {
+    if (isPreviewMode && !prevIsPreviewMode.current) {
+      previewAutofit();
+    }
+    prevIsPreviewMode.current = isPreviewMode;
+  }, [isPreviewMode, previewAutofit]);
+
+  const handlePreviewLoad = useCallback(() => {
+    setIsPreviewLoading(false);
+    try {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc) {
+        setPreviewContentHeight(doc.documentElement.scrollHeight);
+      }
+    } catch {
+      // Cross-origin — fall back to 0
+    }
+  }, []);
 
   // Load collection items when dynamic page is selected
   useEffect(() => {
@@ -1455,28 +1697,20 @@ const CenterCanvas = React.memo(function CenterCanvas({
 
   // Handle page selection
   const handlePageSelect = useCallback((pageId: string) => {
-    // Clear selection FIRST to release locks on the current page's channel
-    // before switching to the new page's channel
-    setSelectedLayerId(null);
+    if (pageId === currentPageId) return;
 
-    // Set the page ID immediately for responsive UI
-    // The URL effect in YCodeBuilderMain uses a ref to track when we're navigating
-    // to prevent reverting to the old page before the URL updates
+    // Set to body directly so the layer sync effect won't trigger a second URL update
+    setSelectedLayerId('body');
     setCurrentPageId(pageId);
 
-    // Navigate to the same route type but with the new page ID
-    // IMPORTANT: Explicitly pass 'body' as the layer to avoid carrying over invalid layer IDs from the old page
-    if (routeType === 'layers') {
-      navigateToLayers(pageId, undefined, undefined, 'body');
-    } else if (routeType === 'page' && urlState.isEditing) {
+    if (urlState.isEditing) {
       navigateToPageEdit(pageId);
-    } else if (routeType === 'page') {
+    } else if (activeSidebarTab === 'pages') {
       navigateToPage(pageId, undefined, undefined, 'body');
     } else {
-      // Default to layers if no route type
       navigateToLayers(pageId, undefined, undefined, 'body');
     }
-  }, [setSelectedLayerId, setCurrentPageId, routeType, urlState.isEditing, navigateToLayers, navigateToPage, navigateToPageEdit]);
+  }, [currentPageId, setSelectedLayerId, setCurrentPageId, activeSidebarTab, urlState.isEditing, navigateToLayers, navigateToPage, navigateToPageEdit]);
 
   // Fetch referenced collection items recursively when layers with reference fields are detected
   useEffect(() => {
@@ -1564,124 +1798,6 @@ const CenterCanvas = React.memo(function CenterCanvas({
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [isPreviewMode, handleUndo, handleRedo]);
-
-  // Add zoom gesture handlers for preview mode (when iframe doesn't have them)
-  useEffect(() => {
-    if (!isPreviewMode) return; // Editor iframe handles its own zoom gestures
-
-    const container = canvasContainerRef.current;
-    const iframe = iframeRef.current;
-    if (!container) return;
-
-    // Get iframe's window and document for event listening
-    let iframeWindow: Window | null = null;
-    let iframeDocument: Document | null = null;
-
-    // Wait for iframe to load before attaching listeners
-    const setupIframeListeners = () => {
-      try {
-        iframeWindow = iframe?.contentWindow || null;
-        iframeDocument = iframe?.contentDocument || null;
-
-        if (!iframeWindow || !iframeDocument) return;
-
-        // Attach listeners to iframe's document
-        iframeDocument.addEventListener('wheel', handleWheel, { passive: false, capture: true });
-        iframeDocument.addEventListener('touchstart', handleTouchStart, { passive: true });
-        iframeDocument.addEventListener('touchmove', handleTouchMove, { passive: true });
-        iframeDocument.addEventListener('touchend', handleTouchEnd, { passive: true });
-      } catch (e) {
-        // Cross-origin iframe - fall back to container listeners only
-        console.warn('Cannot access iframe document for zoom gestures:', e);
-      }
-    };
-
-    // Wheel event for Ctrl/Cmd + wheel zoom (includes trackpad pinch on Mac)
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Positive deltaY means zoom out, negative means zoom in
-        const delta = -e.deltaY;
-        handleZoomGesture(delta);
-
-        return false;
-      }
-    };
-
-    // Touch events for pinch zoom on mobile/tablet
-    let lastTouchDistance: number | null = null;
-
-    const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 2) {
-        const touch1 = e.touches[0];
-        const touch2 = e.touches[1];
-        const dx = touch2.clientX - touch1.clientX;
-        const dy = touch2.clientY - touch1.clientY;
-        lastTouchDistance = Math.sqrt(dx * dx + dy * dy);
-      }
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (e.touches.length === 2 && lastTouchDistance !== null) {
-        const touch1 = e.touches[0];
-        const touch2 = e.touches[1];
-        const dx = touch2.clientX - touch1.clientX;
-        const dy = touch2.clientY - touch1.clientY;
-        const currentDistance = Math.sqrt(dx * dx + dy * dy);
-
-        // Calculate delta and send zoom gesture
-        const delta = (currentDistance - lastTouchDistance) * 2;
-        handleZoomGesture(delta);
-
-        lastTouchDistance = currentDistance;
-      }
-    };
-
-    const handleTouchEnd = () => {
-      lastTouchDistance = null;
-    };
-
-    // Add event listeners to container (fallback for when cursor is outside iframe)
-    container.addEventListener('wheel', handleWheel, { passive: false, capture: true });
-    container.addEventListener('touchstart', handleTouchStart, { passive: true });
-    container.addEventListener('touchmove', handleTouchMove, { passive: true });
-    container.addEventListener('touchend', handleTouchEnd, { passive: true });
-
-    // Setup iframe listeners when iframe loads
-    if (iframe) {
-      iframe.addEventListener('load', setupIframeListeners);
-      // Try to set up immediately in case iframe is already loaded
-      if (iframe.contentDocument?.readyState === 'complete') {
-        setupIframeListeners();
-      }
-    }
-
-    return () => {
-      // Remove container listeners
-      container.removeEventListener('wheel', handleWheel);
-      container.removeEventListener('touchstart', handleTouchStart);
-      container.removeEventListener('touchmove', handleTouchMove);
-      container.removeEventListener('touchend', handleTouchEnd);
-
-      // Remove iframe listeners if they were added
-      if (iframeDocument) {
-        try {
-          iframeDocument.removeEventListener('wheel', handleWheel);
-          iframeDocument.removeEventListener('touchstart', handleTouchStart);
-          iframeDocument.removeEventListener('touchmove', handleTouchMove);
-          iframeDocument.removeEventListener('touchend', handleTouchEnd);
-        } catch (e) {
-          // Ignore errors when removing listeners
-        }
-      }
-
-      if (iframe) {
-        iframe.removeEventListener('load', setupIframeListeners);
-      }
-    };
-  }, [isPreviewMode, handleZoomGesture]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col relative">
@@ -1774,61 +1890,16 @@ const CenterCanvas = React.memo(function CenterCanvas({
         )}
 
         {/* Viewport Controls */}
-        <div className="flex justify-center gap-2">
-          <Tabs value={viewportMode} onValueChange={(value) => setViewportMode(value as ViewportMode)}>
-            <TabsList className="w-50">
-            <TabsTrigger value="desktop" title="Desktop View">
-              Desktop
-            </TabsTrigger>
-            <TabsTrigger value="tablet" title="Tablet View">
-              Tablet
-            </TabsTrigger>
-            <TabsTrigger value="mobile" title="Mobile View">
-              Phone
-            </TabsTrigger>
-          </TabsList>
-          </Tabs>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="input" size="sm">
-                {Math.round(zoom)}%
-                <div>
-                  <Icon name="chevronDown" className="size-2.5! opacity-50" />
-                </div>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              side="bottom"
-              sideOffset={4}
-              avoidCollisions={false}
-              collisionPadding={0}
-              className="max-h-75! w-38"
-            >
-              <DropdownMenuItem onClick={zoomIn}>
-                Zoom in
-                <DropdownMenuShortcut>⌘+</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={zoomOut}>
-                Zoom out
-                <DropdownMenuShortcut>⌘-</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={resetZoom}>
-                Zoom to 100%
-                <DropdownMenuShortcut>⌘0</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={zoomToFit}>
-                Fit height
-                <DropdownMenuShortcut>⌘1</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={autofit}>
-                Fit width
-                <DropdownMenuShortcut>⌘2</DropdownMenuShortcut>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <ViewportZoomControls
+          viewportMode={viewportMode}
+          zoom={zoom}
+          onViewportChange={setViewportMode}
+          onZoomIn={zoomIn}
+          onZoomOut={zoomOut}
+          onResetZoom={resetZoom}
+          onZoomToFit={zoomToFit}
+          onAutofit={autofit}
+        />
 
         {/* Undo/Redo Buttons (hidden in preview mode) */}
         {!isPreviewMode && (
@@ -1858,35 +1929,37 @@ const CenterCanvas = React.memo(function CenterCanvas({
       {/* Text Editor Toolbar - shown when editing text */}
       {isTextEditing && !isPreviewMode && (
         <div className="absolute top-0 h-16.25 left-0 right-0 z-50 flex items-center justify-center gap-2 px-4 bg-background border-b">
-          {/* Heading/Paragraph Dropdown */}
-          <Select
-            value={
-              textEditorActiveMarks.headingLevel
-                ? `h${textEditorActiveMarks.headingLevel}`
-                : 'paragraph'
-            }
-            onValueChange={(value) => {
-              if (value === 'paragraph') {
-                setHeading(null);
-              } else {
-                const level = parseInt(value.replace('h', '')) as 1 | 2 | 3 | 4 | 5 | 6;
-                setHeading(level);
+          {/* Heading/Paragraph Dropdown - hidden for heading and text elements (they use the Tag selector in the sidebar) */}
+          {selectedLayerName !== 'heading' && selectedLayerName !== 'text' && (
+            <Select
+              value={
+                textEditorActiveMarks.headingLevel
+                  ? `h${textEditorActiveMarks.headingLevel}`
+                  : 'paragraph'
               }
-            }}
-          >
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="paragraph">Paragraph</SelectItem>
-              <SelectItem value="h1">Heading 1</SelectItem>
-              <SelectItem value="h2">Heading 2</SelectItem>
-              <SelectItem value="h3">Heading 3</SelectItem>
-              <SelectItem value="h4">Heading 4</SelectItem>
-              <SelectItem value="h5">Heading 5</SelectItem>
-              <SelectItem value="h6">Heading 6</SelectItem>
-            </SelectContent>
-          </Select>
+              onValueChange={(value) => {
+                if (value === 'paragraph') {
+                  setHeading(null);
+                } else {
+                  const level = parseInt(value.replace('h', '')) as 1 | 2 | 3 | 4 | 5 | 6;
+                  setHeading(level);
+                }
+              }}
+            >
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="paragraph">Paragraph</SelectItem>
+                <SelectItem value="h1">Heading 1</SelectItem>
+                <SelectItem value="h2">Heading 2</SelectItem>
+                <SelectItem value="h3">Heading 3</SelectItem>
+                <SelectItem value="h4">Heading 4</SelectItem>
+                <SelectItem value="h5">Heading 5</SelectItem>
+                <SelectItem value="h6">Heading 6</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
 
           {/* Link Button */}
           {textEditor && (() => {
@@ -1897,8 +1970,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
               if (editingComponentId) {
                 layersToSearch = componentDrafts[editingComponentId] || [];
               } else if (currentPageId) {
-                const draft = draftsByPageId[currentPageId];
-                layersToSearch = draft ? draft.layers : [];
+                layersToSearch = currentDraft ? currentDraft.layers : [];
               }
               editingLayer = findLayerById(layersToSearch, editingLayerId);
             }
@@ -2038,39 +2110,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
             </ToggleGroupItem>
           </ToggleGroup>
 
-          {/* Lists */}
-          <ToggleGroup
-            type="multiple"
-            size="xs"
-            variant="secondary"
-            spacing={1}
-          >
-            <ToggleGroupItem
-              value="bulletList"
-              data-state={textEditorActiveMarks.bulletList ? 'on' : 'off'}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                toggleBulletList();
-              }}
-              title="Bullet List"
-            >
-              <Icon name="listUnordered" className="size-3" />
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              value="orderedList"
-              data-state={textEditorActiveMarks.orderedList ? 'on' : 'off'}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                toggleOrderedList();
-              }}
-              title="Numbered List"
-            >
-              <Icon name="listOrdered" className="size-3" />
-            </ToggleGroupItem>
-          </ToggleGroup>
-
           {/* Inline Variable Button */}
-          {hasFieldsMatching(fieldGroups, f => DISPLAYABLE_FIELD_TYPES.includes(f.type)) && (
+          {textFieldGroups.length > 0 && (
             <ToggleGroup
               type="single"
               size="xs"
@@ -2099,7 +2140,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                     sideOffset={4}
                   >
                     <CollectionFieldSelector
-                      fieldGroups={fieldGroups}
+                      fieldGroups={textFieldGroups}
                       allFields={collectionFieldsFromStore}
                       collections={collectionsFromStore}
                       onSelect={(fieldId, relationshipPath, source) => {
@@ -2155,7 +2196,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
         )}
 
         {/* Selection overlay - renders outlines on top of the iframe */}
-        {!isPreviewMode && canvasIframeElement && (
+        {!isPreviewMode && activeSidebarTab !== 'pages' && canvasIframeElement && (
           <SelectionOverlay
             iframeElement={canvasIframeElement}
             containerElement={scrollContainerRef.current}
@@ -2163,6 +2204,8 @@ const CenterCanvas = React.memo(function CenterCanvas({
             hoveredLayerId={hoveredLayerId}
             parentLayerId={parentLayerId}
             zoom={zoom}
+            activeSublayerIndex={activeSublayerIndex}
+            activeListItemIndex={activeListItemIndex}
           />
         )}
 
@@ -2172,86 +2215,36 @@ const CenterCanvas = React.memo(function CenterCanvas({
         {/* Element picker SVG connector overlay */}
         <ElementPickerOverlay iframeElement={canvasIframeElement} zoom={zoom} />
 
-        {/* Scrollable container with hidden scrollbars */}
+        {/* Scrollable container with hidden scrollbars (editor canvas) */}
         <div
           ref={scrollContainerRef}
           className={cn(
-            'absolute inset-0 z-0',
-            isPreviewMode ? 'overflow-hidden' : 'overflow-auto',
+            'absolute inset-0 z-0 overflow-auto',
             elementPicker?.active && 'cursor-crosshair'
           )}
           style={{
-            // Hide content until initial zoom is calculated to prevent layout jump
             opacity: isCanvasReady ? 1 : 0,
-            // Hide scrollbars but keep scrolling functionality (editor mode only)
-            scrollbarWidth: isPreviewMode ? undefined : 'none', // Firefox
-            msOverflowStyle: isPreviewMode ? undefined : 'none', // IE/Edge
-            WebkitOverflowScrolling: isPreviewMode ? undefined : 'touch', // Smooth scrolling on iOS
+            scrollbarWidth: 'none', // Firefox
+            msOverflowStyle: 'none', // IE/Edge
+            WebkitOverflowScrolling: 'touch',
           }}
           onClick={handleCanvasClick}
         >
-          {/* Hide scrollbars for Webkit browsers (editor mode only) */}
-          {!isPreviewMode && (
-            <style jsx>{`
-              div::-webkit-scrollbar {
-                display: none;
-              }
-            `}</style>
-          )}
+          {/* Hide scrollbars for Webkit browsers */}
+          <style jsx>{`
+            div::-webkit-scrollbar {
+              display: none;
+            }
+          `}</style>
 
-          {/* Preview mode: Scaled iframe with internal scrolling */}
-          {isPreviewMode ? (
-            <div
-              className="w-full h-full flex items-start justify-center"
-              style={{
-                padding: `${CANVAS_BORDER}px`,
-              }}
-            >
-              <div
-                className="bg-white shadow-3xl relative"
-                style={{
-                  width: viewportSizes[viewportMode].width,
-                  // Compensate height for zoom so visual size = 100% after scaling
-                  height: `${((containerHeight - CANVAS_PADDING) / (zoom / 100))}px`,
-                  zoom: zoom / 100,
-                  transition: 'none',
-                }}
-              >
-                {layers.length > 0 ? (
-                  <iframe
-                    key={previewKey}
-                    ref={iframeRef}
-                    src={previewUrl}
-                    className="w-full h-full border-0"
-                    title="Preview"
-                    tabIndex={-1}
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center p-12">
-                    <div className="text-center max-w-md">
-                      <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
-                        <Icon name="layout" className="w-10 h-10 text-blue-500" />
-                      </div>
-                      <h2 className="text-2xl font-bold text-gray-900 mb-3">
-                        No content
-                      </h2>
-                      <p className="text-gray-600">
-                        This page has no content to preview.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            /* Editor mode: Scaled canvas with zoom controls */
-            <div
-              style={{
-                position: 'relative',
-                minWidth: '100%',
-                minHeight: '100%',
-              }}
-            >
+          {/* Editor mode: Scaled canvas with zoom controls - always in DOM, never resized */}
+          <div
+            style={{
+              position: 'relative',
+              minWidth: '100%',
+              minHeight: '100%',
+            }}
+          >
               <div
                 style={{
                   // Width: exact scaled size, min 100% to fill viewport horizontally
@@ -2334,6 +2327,7 @@ const CenterCanvas = React.memo(function CenterCanvas({
                         onCanvasClick={handleCanvasClick}
                         editingComponentVariables={editingComponentVariables}
                         disableEditorHiddenLayers={!!activeInteractionTriggerLayerId}
+                        zoom={zoom}
                       />
 
                       {/* Drop indicator overlay - subscribes to store directly */}
@@ -2535,7 +2529,98 @@ const CenterCanvas = React.memo(function CenterCanvas({
                 </div>
               </div>
             </div>
+        </div>
+
+      </div>
+
+      {/* Preview panel - fixed overlay covering sidebars + canvas below the main header.
+          Always rendered so the iframe stays mounted (no reload on toggle). */}
+      <div
+        className="flex flex-col bg-neutral-50 dark:bg-neutral-950"
+        style={{
+          position: 'fixed',
+          top: '3.5rem', // h-14 header height
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 50,
+          display: isPreviewMode ? 'flex' : 'none',
+        }}
+      >
+        {/* Preview toolbar */}
+        <div className="shrink-0 grid grid-cols-3 items-center p-4 border-b bg-background">
+          <div />
+          <ViewportZoomControls
+            viewportMode={viewportMode}
+            zoom={previewZoom}
+            onViewportChange={setViewportMode}
+            onZoomIn={previewZoomIn}
+            onZoomOut={previewZoomOut}
+            onResetZoom={previewResetZoom}
+            onZoomToFit={previewZoomToFit}
+            onAutofit={previewAutofit}
+          />
+          <div className="flex justify-end">
+            {previewUrl && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => window.open(previewUrl, '_blank')}
+              >
+                Open in new tab
+                <Icon name="external-link" />
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Preview iframe area */}
+        <div
+          ref={previewContainerRef}
+          className="flex-1 relative flex items-start overflow-auto"
+          style={{ padding: `${CANVAS_BORDER}px` }}
+        >
+          {isPreviewLoading && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-background">
+              <Spinner />
+            </div>
           )}
+          <div
+            className="bg-white shadow-3xl relative mx-auto"
+            style={{
+              zoom: previewZoom / 100,
+              width: viewportMode === 'desktop' ? '100%' : viewportSizes[viewportMode].width,
+              minWidth: viewportMode === 'desktop' ? viewportSizes[viewportMode].width : undefined,
+              height: previewContentHeight > 0 ? `${previewContentHeight}px` : '100%',
+              flexShrink: 0,
+              transition: 'none',
+            }}
+          >
+            {layers.length > 0 ? (
+              <iframe
+                ref={iframeRef}
+                src={previewUrl}
+                className="w-full h-full border-0"
+                title="Preview"
+                tabIndex={-1}
+                onLoad={handlePreviewLoad}
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center p-12">
+                <div className="text-center max-w-md">
+                  <div className="w-20 h-20 bg-linear-to-br from-blue-100 to-blue-50 rounded-2xl mx-auto mb-6 flex items-center justify-center">
+                    <Icon name="layout" className="w-10 h-10 text-blue-500" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-3">
+                    No content
+                  </h2>
+                  <p className="text-gray-600">
+                    This page has no content to preview.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

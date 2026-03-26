@@ -24,12 +24,29 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { selectVariants } from '@/components/ui/select';
-import type { CollectionField, Collection } from '@/types';
+import type { CollectionField, Collection, CollectionFieldType } from '@/types';
 import { getFieldIcon, filterFieldGroupsByType, flattenFieldGroups, DISPLAYABLE_FIELD_TYPES } from '@/lib/collection-field-utils';
 
 // Import and re-export from centralized location for backwards compatibility
 import type { FieldSourceType, FieldGroup } from '@/lib/collection-field-utils';
 export type { FieldSourceType, FieldGroup } from '@/lib/collection-field-utils';
+
+/**
+ * Derives the effective allowed types from pre-filtered field groups by collecting
+ * all non-reference field types present. Used to constrain reference sub-options
+ * to the same types that were used to filter the root level.
+ */
+function deriveAllowedTypesFromGroups(fieldGroups: FieldGroup[]): CollectionFieldType[] {
+  const types = new Set<CollectionFieldType>();
+  for (const group of fieldGroups) {
+    for (const field of group.fields) {
+      if (field.type !== 'reference' && field.type !== 'multi_reference') {
+        types.add(field.type as CollectionFieldType);
+      }
+    }
+  }
+  return Array.from(types);
+}
 
 interface CollectionFieldListProps {
   /** Fields to display at the current level */
@@ -42,14 +59,14 @@ interface CollectionFieldListProps {
   onSelect: (fieldId: string, relationshipPath: string[], source?: FieldSourceType, layerId?: string) => void;
   /** Current relationship path (used internally for recursion) */
   relationshipPath?: string[];
-  /** Label for the current collection group */
-  collectionLabel?: string;
   /** Source type for these fields (used internally for recursion) */
   source?: FieldSourceType;
   /** ID of the collection layer these fields belong to */
   layerId?: string;
   /** Depth level for indentation (used internally) */
   depth?: number;
+  /** Allowed field types for filtering sub-options */
+  allowedTypes?: CollectionFieldType[];
 }
 
 /**
@@ -90,6 +107,7 @@ function ReferenceFieldGroup({
   source,
   layerId,
   depth = 0,
+  allowedTypes,
 }: {
   field: CollectionField;
   allFields: Record<string, CollectionField[]>;
@@ -99,27 +117,33 @@ function ReferenceFieldGroup({
   source?: FieldSourceType;
   layerId?: string;
   depth?: number;
+  allowedTypes?: CollectionFieldType[];
 }) {
   const referencedCollectionId = field.reference_collection_id;
   const referencedFields = referencedCollectionId ? allFields[referencedCollectionId] || [] : [];
   const referencedCollection = collections.find((c) => c.id === referencedCollectionId);
 
-  // Filter out multi-reference fields from nested display
-  const displayableFields = referencedFields.filter((f) => f.type !== 'multi_reference');
-  const hasNestedFields = displayableFields.length > 0;
+  // Filter sub-fields: exclude multi_reference, apply allowedTypes if provided (keeping reference for deep nesting)
+  const displayableFields = referencedFields.filter((f) => {
+    if (f.type === 'multi_reference') return false;
+    if (allowedTypes && allowedTypes.length > 0 && f.type !== 'reference') {
+      return allowedTypes.includes(f.type);
+    }
+    return true;
+  });
+  if (displayableFields.length === 0) return null;
 
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger
         className="gap-2"
         style={{ paddingLeft: `${8 + depth * 16}px` }}
-        disabled={!hasNestedFields}
       >
         <Icon name="database" className="size-3 text-muted-foreground shrink-0" />
         <span className="truncate">{field.name}</span>
       </DropdownMenuSubTrigger>
 
-      {hasNestedFields && (
+      {(
         <DropdownMenuSubContent className="min-w-45">
           {referencedCollection && (
             <DropdownMenuLabel className="text-xs text-foreground/80 flex items-center justify-between gap-2">
@@ -136,6 +160,7 @@ function ReferenceFieldGroup({
             source={source}
             layerId={layerId}
             depth={0}
+            allowedTypes={allowedTypes}
           />
         </DropdownMenuSubContent>
       )}
@@ -155,6 +180,7 @@ function CollectionFieldSelectorInner({
   source,
   layerId,
   depth = 0,
+  allowedTypes,
 }: CollectionFieldListProps) {
   // Filter out multi-reference fields
   const displayableFields = fields.filter((f) => f.type !== 'multi_reference');
@@ -175,6 +201,7 @@ function CollectionFieldSelectorInner({
               source={source}
               layerId={layerId}
               depth={depth}
+              allowedTypes={allowedTypes}
             />
           );
         }
@@ -201,51 +228,6 @@ function CollectionFieldSelectorInner({
   );
 }
 
-/**
- * Collection Field List - Renders a single group's fields with reference submenus.
- * Used internally by CollectionFieldSelector.
- */
-function CollectionFieldList({
-  fields,
-  allFields,
-  collections,
-  onSelect,
-  collectionLabel,
-  source,
-  layerId,
-  relationshipPath = [],
-  depth = 0,
-}: CollectionFieldListProps) {
-  // Filter out multi-reference fields at root level
-  const displayableFields = fields.filter((f) => f.type !== 'multi_reference');
-
-  if (displayableFields.length === 0) {
-    return (
-      <div className="px-3 py-2 text-xs text-zinc-500">
-        No fields available
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      {collectionLabel && (
-        <DropdownMenuLabel>{collectionLabel}</DropdownMenuLabel>
-      )}
-      <CollectionFieldSelectorInner
-        fields={displayableFields}
-        allFields={allFields}
-        collections={collections}
-        onSelect={onSelect}
-        relationshipPath={relationshipPath}
-        source={source}
-        layerId={layerId}
-        depth={depth}
-      />
-    </div>
-  );
-}
-
 interface CollectionFieldSelectorProps {
   /** Field groups to display, each with their own source and label */
   fieldGroups: FieldGroup[];
@@ -255,6 +237,8 @@ interface CollectionFieldSelectorProps {
   collections: Collection[];
   /** Callback when a field is selected */
   onSelect: (fieldId: string, relationshipPath: string[], source?: FieldSourceType, layerId?: string) => void;
+  /** Allowed field types for filtering sub-options in reference fields */
+  allowedTypes?: CollectionFieldType[];
 }
 
 /**
@@ -268,9 +252,20 @@ export function CollectionFieldSelector({
   allFields,
   collections,
   onSelect,
+  allowedTypes,
 }: CollectionFieldSelectorProps) {
-  // Filter to groups with displayable fields (excludes multi_reference)
-  const nonEmptyGroups = filterFieldGroupsByType(fieldGroups, DISPLAYABLE_FIELD_TYPES);
+  // Derive effective types from the incoming groups when not explicitly provided.
+  // Call sites already pre-filter groups to specific types, so the non-reference
+  // types present in the groups reflect the intended constraint.
+  const effectiveAllowedTypes = allowedTypes ?? deriveAllowedTypesFromGroups(fieldGroups);
+
+  // Single filter pass: keeps only matching fields and excludes reference fields
+  // whose referenced collections have no matching sub-fields (via allFields check).
+  const nonEmptyGroups = filterFieldGroupsByType(
+    fieldGroups,
+    effectiveAllowedTypes.length > 0 ? effectiveAllowedTypes : DISPLAYABLE_FIELD_TYPES,
+    { allFields },
+  );
 
   if (nonEmptyGroups.length === 0) {
     return (
@@ -310,6 +305,7 @@ export function CollectionFieldSelector({
               source={group.source}
               layerId={group.layerId}
               depth={0}
+              allowedTypes={effectiveAllowedTypes}
             />
           </div>
         );
@@ -338,7 +334,7 @@ interface FieldSelectDropdownProps {
   /** Additional class names for the trigger button */
   className?: string;
   /** Field types to filter to (defaults to all displayable types) */
-  allowedFieldTypes?: string[];
+  allowedFieldTypes?: CollectionFieldType[];
 }
 
 /**
@@ -362,11 +358,9 @@ export function FieldSelectDropdown({
 
   // Filter field groups by allowed types
   const filteredGroups = useMemo(() => {
-    if (allowedFieldTypes && allowedFieldTypes.length > 0) {
-      return filterFieldGroupsByType(fieldGroups, allowedFieldTypes as any);
-    }
-    return filterFieldGroupsByType(fieldGroups, DISPLAYABLE_FIELD_TYPES);
-  }, [fieldGroups, allowedFieldTypes]);
+    const types = allowedFieldTypes && allowedFieldTypes.length > 0 ? allowedFieldTypes : DISPLAYABLE_FIELD_TYPES;
+    return filterFieldGroupsByType(fieldGroups, types, { allFields });
+  }, [fieldGroups, allowedFieldTypes, allFields]);
 
   // Find the selected field for display
   const selectedField = useMemo(() => {
@@ -414,6 +408,7 @@ export function FieldSelectDropdown({
           allFields={allFields}
           collections={collections}
           onSelect={handleSelect}
+          allowedTypes={allowedFieldTypes}
         />
       </DropdownMenuContent>
     </DropdownMenu>

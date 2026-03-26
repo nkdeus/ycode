@@ -1,19 +1,79 @@
 import AnimationInitializer from '@/components/AnimationInitializer';
 import ContentHeightReporter from '@/components/ContentHeightReporter';
+import CustomCodeInjector from '@/components/CustomCodeInjector';
 import LayerRenderer from '@/components/LayerRenderer';
 import SliderInitializer from '@/components/SliderInitializer';
 import LightboxInitializer from '@/components/LightboxInitializer';
 import PasswordForm from '@/components/PasswordForm';
+import { renderHeadCode } from '@/lib/parse-head-html';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, getGoogleFontLinks } from '@/lib/font-utils';
 import { collectLayerAssetIds, getAssetProxyUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
-import { getItemWithValues } from '@/lib/repositories/collectionItemRepository';
+import { getItemWithValues, getItemsWithValues } from '@/lib/repositories/collectionItemRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
+import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX } from '@/lib/link-utils';
 import { getClassesString } from '@/lib/layer-utils';
 import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder } from '@/types';
+
+interface PageLinkRef { collection_item_id: string; page_id: string }
+
+/** Recursively collect all page link refs ({collection_item_id, page_id}) from a Tiptap JSON node */
+function collectTiptapPageLinks(node: any): PageLinkRef[] {
+  if (!node || typeof node !== 'object') return [];
+  const results: PageLinkRef[] = [];
+  if (node.marks && Array.isArray(node.marks)) {
+    for (const mark of node.marks) {
+      if (mark.type === 'richTextLink' && mark.attrs?.type === 'page'
+        && mark.attrs.page?.collection_item_id && mark.attrs.page?.id) {
+        results.push({ collection_item_id: mark.attrs.page.collection_item_id, page_id: mark.attrs.page.id });
+      }
+    }
+  }
+  if (node.content && Array.isArray(node.content)) {
+    for (const child of node.content) results.push(...collectTiptapPageLinks(child));
+  }
+  return results;
+}
+
+/**
+ * Walk a layer tree and return every page link ref from both layer-level links
+ * and richTextLink marks inside rich text variables.
+ */
+function collectLayerPageLinks(layers: Layer[]): PageLinkRef[] {
+  const results: PageLinkRef[] = [];
+  const scan = (layer: Layer) => {
+    if (layer.variables?.link?.type === 'page') {
+      const { collection_item_id, id: page_id } = layer.variables.link.page ?? {};
+      if (collection_item_id && page_id) results.push({ collection_item_id, page_id });
+    }
+    const textVar = layer.variables?.text as any;
+    if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
+      results.push(...collectTiptapPageLinks(textVar.data.content));
+    }
+    if (layer.children) layer.children.forEach(scan);
+  };
+  layers.forEach(scan);
+  return results;
+}
+
+/**
+ * Extract collection item slugs from resolved collection layers.
+ * These are populated by resolveCollectionLayers with `_collectionItemId` / `_collectionItemSlug`.
+ */
+function extractCollectionItemSlugs(layers: Layer[]): Record<string, string> {
+  const slugs: Record<string, string> = {};
+  const scan = (layer: Layer) => {
+    if (layer._collectionItemId && layer._collectionItemSlug) {
+      slugs[layer._collectionItemId] = layer._collectionItemSlug;
+    }
+    if (layer.children) layer.children.forEach(scan);
+  };
+  layers.forEach(scan);
+  return slugs;
+}
 
 /** Recursively check if any layer in the tree is a slider */
 function hasSliderLayers(layers: Layer[]): boolean {
@@ -46,16 +106,18 @@ interface PageRendererProps {
   layers: Layer[];
   components: Component[];
   generatedCss?: string;
+  colorVariablesCss?: string;
   collectionItem?: CollectionItemWithValues;
   collectionFields?: CollectionField[];
   locale?: Locale | null;
   availableLocales?: Locale[];
-  isPreview?: boolean; // Whether we're in preview mode (use draft data)
-  translations?: Record<string, any> | null; // Translations for localized URL generation
-  gaMeasurementId?: string | null; // Google Analytics Measurement ID (pre-fetched)
-  globalCustomCodeBody?: string | null; // Global custom code for </body> (pre-fetched)
-  ycodeBadge?: boolean; // Whether to show the "Made in Ycode" badge
-  passwordProtection?: PasswordProtectionContext; // For 401 error pages - inject password form
+  isPreview?: boolean;
+  translations?: Record<string, any> | null;
+  gaMeasurementId?: string | null;
+  globalCustomCodeHead?: string | null;
+  globalCustomCodeBody?: string | null;
+  ycodeBadge?: boolean;
+  passwordProtection?: PasswordProtectionContext;
 }
 
 /**
@@ -84,6 +146,7 @@ export default async function PageRenderer({
   layers,
   components,
   generatedCss,
+  colorVariablesCss,
   collectionItem,
   collectionFields = [],
   locale,
@@ -91,6 +154,7 @@ export default async function PageRenderer({
   isPreview = false,
   translations,
   gaMeasurementId,
+  globalCustomCodeHead,
   globalCustomCodeBody,
   ycodeBadge = true,
   passwordProtection,
@@ -101,44 +165,14 @@ export default async function PageRenderer({
   // Components are passed through for rich-text embedded component rendering in LayerRenderer.
   const resolvedLayers = layers || [];
 
-  // Scan layers for collection_item_ids referenced in link settings
-  // Excludes special keywords like 'current-page' and 'current-collection' which are resolved at runtime
-  const findCollectionItemIds = (layers: Layer[]): Set<string> => {
-    const itemIds = new Set<string>();
-    const specialKeywords = ['current-page', 'current-collection'];
-    const scan = (layer: Layer) => {
-      const itemId = layer.variables?.link?.page?.collection_item_id;
-      if (layer.variables?.link?.type === 'page' && itemId && !specialKeywords.includes(itemId)) {
-        itemIds.add(itemId);
-      }
-      if (layer.children) {
-        layer.children.forEach(scan);
-      }
-    };
-    layers.forEach(scan);
-    return itemIds;
-  };
-
-  // Extract collection item slugs from resolved collection layers
-  // These are populated by resolveCollectionLayers with `_collectionItemId` and `_collectionItemSlug`
-  const extractCollectionItemSlugs = (layers: Layer[]): Record<string, string> => {
-    const slugs: Record<string, string> = {};
-    const scan = (layer: Layer) => {
-      // Check for SSR-resolved collection item with ID and slug
-      const itemId = layer._collectionItemId;
-      const itemSlug = layer._collectionItemSlug;
-      if (itemId && itemSlug) {
-        slugs[itemId] = itemSlug;
-      }
-      if (layer.children) {
-        layer.children.forEach(scan);
-      }
-    };
-    layers.forEach(scan);
-    return slugs;
-  };
-
-  const referencedItemIds = findCollectionItemIds(resolvedLayers);
+  // Single tree traversal — derive both sets from the flat list
+  const allPageLinks = collectLayerPageLinks(resolvedLayers);
+  const DYNAMIC_KEYWORDS = new Set(['current-page', 'current-collection']);
+  const referencedItemIds = new Set(
+    allPageLinks
+      .filter(l => !DYNAMIC_KEYWORDS.has(l.collection_item_id) && !l.collection_item_id.startsWith('ref-'))
+      .map(l => l.collection_item_id)
+  );
 
   // Build collection item slugs map
   const collectionItemSlugs: Record<string, string> = {};
@@ -187,12 +221,37 @@ export default async function PageRenderer({
         }
       }
     }
+
+    // Fetch slugs for all items in collections targeted by ref-* links
+    const refTargetCollectionIds = new Set(
+      allPageLinks
+        .filter(l => l.collection_item_id.startsWith(REF_PAGE_PREFIX) || l.collection_item_id.startsWith(REF_COLLECTION_PREFIX))
+        .map(l => pages.find(p => p.id === l.page_id)?.settings?.cms?.collection_id)
+        .filter((id): id is string => !!id)
+    );
+    for (const collId of refTargetCollectionIds) {
+      const fields = await getFieldsByCollectionId(collId, false);
+      const slugField = fields.find(f => f.key === 'slug');
+      if (!slugField) continue;
+
+      const { items } = await getItemsWithValues(collId, false);
+      for (const item of items) {
+        if (item.values[slugField.id]) {
+          collectionItemSlugs[item.id] = item.values[slugField.id];
+        }
+      }
+    }
   } catch (error) {
     console.error('[PageRenderer] Error fetching link resolution data:', error);
   }
 
   // Extract custom code from page settings and resolve placeholders for dynamic pages
+  const rawPageCustomCodeHead = page.settings?.custom_code?.head || '';
   const rawPageCustomCodeBody = page.settings?.custom_code?.body || '';
+
+  const pageCustomCodeHead = page.is_dynamic && collectionItem
+    ? resolveCustomCodePlaceholders(rawPageCustomCodeHead, collectionItem, collectionFields)
+    : rawPageCustomCodeHead;
 
   const pageCustomCodeBody = page.is_dynamic && collectionItem
     ? resolveCustomCodePlaceholders(rawPageCustomCodeBody, collectionItem, collectionFields)
@@ -231,20 +290,24 @@ export default async function PageRenderer({
 
   // Fetch all assets and build resolved map
   // Use draft assets (isPublished=false) for preview mode, published assets otherwise
-  let resolvedAssets: Record<string, string> | undefined;
+  let resolvedAssets: Record<string, { url: string; width?: number | null; height?: number | null }> | undefined;
   if (layerAssetIds.size > 0) {
     try {
       const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
       const assetMap = await getAssetsByIds(Array.from(layerAssetIds), !isPreview);
       resolvedAssets = {};
       for (const [id, asset] of Object.entries(assetMap)) {
+        let url: string | undefined;
         const proxyUrl = getAssetProxyUrl(asset);
         if (proxyUrl) {
-          resolvedAssets[id] = proxyUrl;
+          url = proxyUrl;
         } else if (asset.public_url) {
-          resolvedAssets[id] = asset.public_url;
+          url = asset.public_url;
         } else if (asset.content) {
-          resolvedAssets[id] = asset.content;
+          url = asset.content;
+        }
+        if (url) {
+          resolvedAssets[id] = { url, width: asset.width, height: asset.height };
         }
       }
     } catch (error) {
@@ -254,7 +317,19 @@ export default async function PageRenderer({
 
   return (
     <>
-      {/* Inject CSS directly - Next.js hoists this to <head> during SSR */}
+      {/* Inject global custom head code — rendered via next/script + React 19 hoisting */}
+      {globalCustomCodeHead && renderHeadCode(globalCustomCodeHead, 'global-head')}
+
+      {/* Inject page-specific custom head code */}
+      {pageCustomCodeHead && renderHeadCode(pageCustomCodeHead, 'page-head')}
+
+      {/* Strip native browser appearance from form elements so Tailwind classes apply */}
+      <style
+        id="ycode-form-reset"
+        dangerouslySetInnerHTML={{ __html: 'input,select,textarea{appearance:none;-webkit-appearance:none}input[type="checkbox"]:checked,input[type="radio"]:checked{background-color:currentColor;border-color:transparent;background-size:100% 100%;background-position:center;background-repeat:no-repeat}input[type="checkbox"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3cpath d=\'M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z\'/%3e%3c/svg%3e")}input[type="radio"]:checked{background-image:url("data:image/svg+xml,%3csvg viewBox=\'0 0 16 16\' fill=\'white\' xmlns=\'http://www.w3.org/2000/svg\'%3e%3ccircle cx=\'8\' cy=\'8\' r=\'3\'/%3e%3c/svg%3e")}' }}
+      />
+
+      {/* Inject CSS directly — React 19 hoists <style> with precedence to <head> */}
       {generatedCss && (
         <style
           id="ycode-styles"
@@ -262,7 +337,15 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts via <link> elements (more reliable than @import) */}
+      {/* Inject color variable CSS custom properties */}
+      {colorVariablesCss && (
+        <style
+          id="ycode-color-vars"
+          dangerouslySetInnerHTML={{ __html: colorVariablesCss }}
+        />
+      )}
+
+      {/* Load Google Fonts via <link> elements */}
       {googleFontLinkUrls.map((url, i) => (
         <link
           key={`gfont-${i}`}
@@ -308,7 +391,7 @@ export default async function PageRenderer({
         </>
       )}
 
-      {/* Apply body layer classes to <body> synchronously before paint */}
+      {/* Apply body layer classes synchronously before paint */}
       <script
         dangerouslySetInnerHTML={{
           __html: (() => {
@@ -318,7 +401,7 @@ export default async function PageRenderer({
         }}
       />
 
-      <div
+      <main
         id="ybody"
         className="contents"
         data-layer-id="body"
@@ -352,7 +435,7 @@ export default async function PageRenderer({
             isPublished={passwordProtection.isPublished}
           />
         )}
-      </div>
+      </main>
 
       {/* Initialize GSAP animations based on layer interactions */}
       <AnimationInitializer layers={resolvedLayers} />
@@ -368,12 +451,12 @@ export default async function PageRenderer({
 
       {/* Inject global custom body code (applies to all pages) */}
       {globalCustomCodeBody && (
-        <div dangerouslySetInnerHTML={{ __html: globalCustomCodeBody }} />
+        <CustomCodeInjector html={globalCustomCodeBody} />
       )}
 
       {/* Inject page-specific custom body code */}
       {pageCustomCodeBody && (
-        <div dangerouslySetInnerHTML={{ __html: pageCustomCodeBody }} />
+        <CustomCodeInjector html={pageCustomCodeBody} />
       )}
 
       {/* Ycode badge (only on published pages, not in preview) */}

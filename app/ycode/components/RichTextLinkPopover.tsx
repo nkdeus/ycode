@@ -13,8 +13,8 @@ import { Editor } from '@tiptap/core';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Separator } from '@/components/ui/separator';
 import RichTextLinkSettings from './RichTextLinkSettings';
+import SettingsPanel from './SettingsPanel';
 import { getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
 import type { Layer, CollectionField, Collection, LinkSettings, LinkType } from '@/types';
 import type { FieldGroup } from './CollectionFieldSelector';
@@ -42,6 +42,8 @@ export interface RichTextLinkPopoverProps {
   disabled?: boolean;
   /** Link types to exclude from the dropdown */
   excludedLinkTypes?: LinkType[];
+  /** Hide "Current page item" and "Reference field" options (e.g. when editing CMS item content) */
+  hidePageContextOptions?: boolean;
 }
 
 /**
@@ -59,6 +61,7 @@ export default function RichTextLinkPopover({
   onOpenChange: controlledOnOpenChange,
   disabled = false,
   excludedLinkTypes = [],
+  hidePageContextOptions = false,
 }: RichTextLinkPopoverProps) {
   // Use controlled state if provided, otherwise internal state
   const [internalOpen, setInternalOpen] = useState(false);
@@ -133,11 +136,7 @@ export default function RichTextLinkPopover({
         const attrs = editor.getAttributes('richTextLink');
         setLinkSettings(getLinkSettingsFromMark(attrs));
       } else {
-        // Default to URL type for new links
-        setLinkSettings({
-          type: 'url',
-          url: { type: 'dynamic_text', data: { content: '' } },
-        });
+        setLinkSettings(null);
       }
     }
 
@@ -158,55 +157,35 @@ export default function RichTextLinkPopover({
     }
   }, [isControlled, controlledOnOpenChange]);
 
-  // Handle settings change
-  const handleSettingsChange = useCallback((settings: LinkSettings | null) => {
-    setLinkSettings(settings);
-  }, []);
+  // Apply link settings to the editor immediately
+  const applyToEditor = useCallback((settings: LinkSettings | null, selection: { from: number; to: number } | null) => {
+    if (!selection) return;
 
-  // Apply link to selection
-  const handleApply = useCallback(() => {
-    if (!savedSelection) {
-      closePopover();
-      return;
-    }
+    const { from, to } = selection;
+    const markType = editor.schema.marks.richTextLink;
+    if (!markType) return;
 
-    const { from, to } = savedSelection;
-
-    if (!linkSettings) {
-      // Remove link if settings are null
+    if (!settings) {
       editor.chain()
         .focus()
         .setTextSelection({ from, to })
         .unsetRichTextLink()
         .run();
-      closePopover();
       return;
     }
 
-    // Get the mark type from schema
-    const markType = editor.schema.marks.richTextLink;
-    if (!markType) {
-      closePopover();
-      return;
-    }
-
-    // Use a direct transaction to update/add the mark
-    editor.chain().focus().setTextSelection({ from, to }).run();
-
-    // Create and dispatch a transaction that removes old mark (if any) and adds new one
     const { state } = editor;
     const tr = state.tr;
-
-    // Remove any existing richTextLink marks in the range
     tr.removeMark(from, to, markType);
-    // Add the new mark with updated settings
-    tr.addMark(from, to, markType.create(linkSettings as any));
-
-    // Dispatch the transaction
+    tr.addMark(from, to, markType.create(settings as any));
     editor.view.dispatch(tr);
+  }, [editor]);
 
-    closePopover();
-  }, [editor, linkSettings, savedSelection, closePopover]);
+  // Handle settings change — apply immediately
+  const handleSettingsChange = useCallback((settings: LinkSettings | null) => {
+    setLinkSettings(settings);
+    applyToEditor(settings, savedSelection);
+  }, [applyToEditor, savedSelection]);
 
   // Remove link from selection
   const handleRemove = useCallback(() => {
@@ -248,64 +227,29 @@ export default function RichTextLinkPopover({
       </PopoverTrigger>
 
       <PopoverContent
-        className="w-64 p-0 bg-background border-border overflow-hidden"
+        className="w-64 px-4 py-0"
         align="start"
         side="bottom"
         sideOffset={8}
       >
-        <div className="flex flex-col">
-          <div className="px-3 py-3.5 border-b bg-input/50">
-            <h4 className="text-xs font-medium">Link settings</h4>
-          </div>
+        <SettingsPanel
+          title="Link"
+          isOpen={true}
+          onToggle={() => {}}
+        >
 
-          <div className="p-1 py-2">
-            <RichTextLinkSettings
-              value={linkSettings}
-              onChange={handleSettingsChange}
-              fieldGroups={fieldGroups}
-              allFields={allFields}
-              collections={collections}
-              isInsideCollectionLayer={isInsideCollectionLayer}
-              layer={layer}
-              excludedLinkTypes={excludedLinkTypes}
-            />
-          </div>
-
-          <Separator />
-
-          <div className="flex items-center justify-between p-3 gap-2">
-            {hadLinkOnOpen && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={handleRemove}
-                className="text-destructive hover:text-destructive"
-              >
-                Remove
-              </Button>
-            )}
-
-            <div className="flex-1" />
-
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={closePopover}
-            >
-              Cancel
-            </Button>
-
-            <Button
-              size="xs"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={handleApply}
-              disabled={!linkSettings || (linkSettings.type === 'url' && !linkSettings.url?.data?.content)}
-            >
-              Apply
-            </Button>
-          </div>
-        </div>
+          <RichTextLinkSettings
+            value={linkSettings}
+            onChange={handleSettingsChange}
+            fieldGroups={fieldGroups}
+            allFields={allFields}
+            collections={collections}
+            isInsideCollectionLayer={isInsideCollectionLayer}
+            layer={layer}
+            excludedLinkTypes={excludedLinkTypes}
+            hidePageContextOptions={hidePageContextOptions}
+          />
+        </SettingsPanel>
       </PopoverContent>
     </Popover>
   );

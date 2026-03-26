@@ -7,6 +7,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/icon';
+import { Button } from '@/components/ui/button';
 
 function Select({
   ...props
@@ -27,11 +28,11 @@ function SelectValue({
 }
 
 const selectVariants = cva(
-  "border-transparent data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive flex items-center justify-between gap-1 rounded-lg border bg-transparent px-2 py-1 text-sm whitespace-nowrap transition-[color,box-shadow] outline-none focus-visible:ring-[3px] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "border-transparent data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:border-ring focus-visible:ring-[0px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive flex items-center justify-between gap-1 rounded-lg border bg-transparent px-2 py-1 text-sm whitespace-nowrap transition-[color,box-shadow] outline-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-2 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
-        default: 'bg-input hover:bg-input/60',
+        default: 'bg-input',
         ghost: 'hover:bg-input dark:hover:bg-input/70 border-transparent shadow-none backdrop-blur',
         overlay: 'bg-white/90 text-neutral-800 hover:bg-white dark:bg-neutral-800/90 dark:text-white dark:hover:bg-neutral-800 disabled:opacity-80',
       },
@@ -68,10 +69,12 @@ function SelectTrigger({
     >
       {children}
       {onClear ? (
-        <span
+        <Button
           role="button"
+          variant="ghost"
+          size="xs"
           tabIndex={0}
-          className="ml-auto -mr-0.5 p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
+          className="ml-auto -mr-1 size-5"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -86,8 +89,10 @@ function SelectTrigger({
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <Icon name="x" className="size-2.5" />
-        </span>
+          <div>
+            <Icon name="x" className="size-2.5" />
+          </div>
+        </Button>
       ) : (
         <SelectPrimitive.Icon asChild>
           <Icon name="chevronDown" className="size-2.5 opacity-50" />

@@ -11,6 +11,10 @@ import type { Knex } from 'knex';
 export async function up(knex: Knex): Promise<void> {
   await knex.schema.raw('DROP INDEX IF EXISTS pages_slug_is_published_folder_unique');
 
+  // Cloud: skip non-tenant-scoped index — cloud_migrations.sql creates
+  // the tenant-scoped pages_tenant_slug_unique index instead
+  if (process.env.SKIP_SETUP === 'true') return;
+
   await knex.schema.raw(`
     CREATE UNIQUE INDEX pages_slug_is_published_folder_unique
     ON pages(

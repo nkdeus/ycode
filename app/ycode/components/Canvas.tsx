@@ -19,9 +19,13 @@ import LayerRenderer from '@/components/LayerRenderer';
 import { serializeLayers, getClassesString } from '@/lib/layer-utils';
 import { collectEditorHiddenLayerIds } from '@/lib/animation-utils';
 import { getCanvasIframeHtml } from '@/lib/canvas-utils';
+import { CanvasPortalProvider } from '@/lib/canvas-portal-context';
 import { cn } from '@/lib/utils';
 import { loadSwiperCss } from '@/lib/slider-utils';
+import { resolveReferenceFieldsSync } from '@/lib/collection-utils';
+import { useEditorStore } from '@/stores/useEditorStore';
 import { useFontsStore } from '@/stores/useFontsStore';
+import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 
 import type { Layer, Component, CollectionItemWithValues, CollectionField, Breakpoint, Asset, ComponentVariable } from '@/types';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
@@ -98,6 +102,8 @@ interface CanvasProps {
   editingComponentVariables?: ComponentVariable[];
   /** Disable editor hidden layers (e.g., when Interactions panel is active) */
   disableEditorHiddenLayers?: boolean;
+  /** Current canvas zoom percentage (100 = 100%) */
+  zoom?: number;
 }
 
 /**
@@ -119,6 +125,7 @@ interface CanvasContentProps {
   editingComponentId?: string | null;
   editorHiddenLayerIds?: Map<string, Breakpoint[]>;
   editorBreakpoint?: Breakpoint;
+  zoom?: number;
 }
 
 function CanvasContent({
@@ -137,8 +144,10 @@ function CanvasContent({
   editingComponentId,
   editorHiddenLayerIds,
   editorBreakpoint,
+  zoom = 100,
 }: CanvasContentProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [portalContainer, setPortalContainer] = useState<HTMLElement | null>(null);
 
   // Seed ancestor set with the component being edited so its own rich-text
   // collection data cannot re-embed itself (prevents infinite loops)
@@ -154,6 +163,8 @@ function CanvasContent({
   useEffect(() => {
     if (!bodyRef.current) return;
     const iframeBody = bodyRef.current.ownerDocument.body;
+
+    setPortalContainer(iframeBody);
 
     const handleBodyClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -180,7 +191,7 @@ function CanvasContent({
     if (!bodyRef.current) return;
     const iframeBody = bodyRef.current.ownerDocument.body;
     const resolvedClasses = editingComponentId
-      ? 'bg-transparent'
+      ? 'bg-transparent relative'
       : (bodyClasses || 'bg-white');
     const classes = resolvedClasses.split(/\s+/).filter(Boolean);
     if (classes.length > 0) {
@@ -194,33 +205,40 @@ function CanvasContent({
     };
   }, [bodyClasses, editingComponentId]);
 
+  const portalValue = useMemo(
+    () => ({ container: portalContainer, zoom }),
+    [portalContainer, zoom]
+  );
+
   return (
-    <div
-      ref={bodyRef}
-      id="canvas-body"
-      data-layer-id="body"
-      className="contents"
-    >
-      <LayerRenderer
-        layers={childLayers}
-        isEditMode={true}
-        isPublished={false}
-        selectedLayerId={selectedLayerId}
-        hoveredLayerId={hoveredLayerId}
-        onLayerClick={onLayerClick}
-        onLayerUpdate={onLayerUpdate}
-        onLayerHover={onLayerHover}
-        pageId={pageId}
-        pageCollectionItemId={pageCollectionItemId}
-        pageCollectionItemData={pageCollectionItemData}
-        liveLayerUpdates={liveLayerUpdates}
-        liveComponentUpdates={liveComponentUpdates}
-        editingComponentVariables={editingComponentVariables}
-        editorHiddenLayerIds={editorHiddenLayerIds}
-        editorBreakpoint={editorBreakpoint}
-        ancestorComponentIds={initialAncestorIds}
-      />
-    </div>
+    <CanvasPortalProvider value={portalValue}>
+      <div
+        ref={bodyRef}
+        id="canvas-body"
+        data-layer-id="body"
+        className="contents"
+      >
+        <LayerRenderer
+          layers={childLayers}
+          isEditMode={true}
+          isPublished={false}
+          selectedLayerId={selectedLayerId}
+          hoveredLayerId={hoveredLayerId}
+          onLayerClick={onLayerClick}
+          onLayerUpdate={onLayerUpdate}
+          onLayerHover={onLayerHover}
+          pageId={pageId}
+          pageCollectionItemId={pageCollectionItemId}
+          pageCollectionItemData={pageCollectionItemData}
+          liveLayerUpdates={liveLayerUpdates}
+          liveComponentUpdates={liveComponentUpdates}
+          editingComponentVariables={editingComponentVariables}
+          editorHiddenLayerIds={editorHiddenLayerIds}
+          editorBreakpoint={editorBreakpoint}
+          ancestorComponentIds={initialAncestorIds}
+        />
+      </div>
+    </CanvasPortalProvider>
   );
 }
 
@@ -264,6 +282,7 @@ export default function Canvas({
   onCanvasClick,
   editingComponentVariables,
   disableEditorHiddenLayers = false,
+  zoom = 100,
 }: CanvasProps) {
   // Refs
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -280,6 +299,19 @@ export default function Canvas({
     return serializeLayers(layers, components, editingComponentVariables);
   }, [layers, components, editingComponentVariables]);
 
+  // Enrich page collection item data with reference field dotted keys
+  // so variables like "refFieldId.targetFieldId" resolve on canvas
+  const enrichedPageCollectionItemData = useMemo(() => {
+    const values = pageCollectionItem?.values;
+    if (!values || !pageCollectionFields?.length) return values || null;
+    return resolveReferenceFieldsSync(
+      values,
+      pageCollectionFields,
+      collectionItems,
+      collectionFields
+    );
+  }, [pageCollectionItem?.values, pageCollectionFields, collectionItems, collectionFields]);
+
   // Collect layer IDs that should be hidden on canvas (display: hidden with on-load)
   const editorHiddenLayerIds = useMemo(() => {
     if (disableEditorHiddenLayers) return undefined;
@@ -288,6 +320,12 @@ export default function Canvas({
 
   // Handle layer click with component resolution
   const handleLayerClick = useCallback((layerId: string, event?: React.MouseEvent) => {
+    // Suppress stale left-clicks that fire on the canvas when a context menu
+    // item is clicked and the menu dismisses (Radix click-through).
+    // Only block when an event is present — onLayerSelect from handleOpenChange
+    // passes no event and must always go through to select the right-clicked layer.
+    if (event && useEditorStore.getState().isCanvasContextMenuOpen) return;
+
     const componentRootId = componentMap[layerId];
     const isPartOfComponent = !!componentRootId;
     const isEditingThisComponent = editingComponentId && componentRootId === editingComponentId;
@@ -419,6 +457,24 @@ export default function Canvas({
     injectFontsCss(iframeDoc);
   }, [iframeReady, fontsCss, injectFontsCss]);
 
+  // Inject color variable CSS custom properties into the canvas iframe
+  const colorVarCss = useColorVariablesStore((state) => state.generateCssDeclarations());
+
+  useEffect(() => {
+    if (!iframeReady || !iframeRef.current) return;
+    const iframeDoc = iframeRef.current.contentDocument;
+    if (!iframeDoc) return;
+
+    const STYLE_ID = 'ycode-color-vars';
+    let styleEl = iframeDoc.getElementById(STYLE_ID) as HTMLStyleElement | null;
+    if (!styleEl) {
+      styleEl = iframeDoc.createElement('style');
+      styleEl.id = STYLE_ID;
+      iframeDoc.head.appendChild(styleEl);
+    }
+    styleEl.textContent = colorVarCss;
+  }, [iframeReady, colorVarCss]);
+
   // Render content into iframe
   useEffect(() => {
     if (!iframeReady || !rootRef.current) return;
@@ -430,7 +486,7 @@ export default function Canvas({
         hoveredLayerId={effectiveHoveredLayerId}
         pageId={pageId}
         pageCollectionItemId={pageCollectionItem?.id}
-        pageCollectionItemData={pageCollectionItem?.values || null}
+        pageCollectionItemData={enrichedPageCollectionItemData}
         onLayerClick={handleLayerClick}
         onLayerUpdate={onLayerUpdate}
         onLayerHover={handleLayerHover}
@@ -440,17 +496,21 @@ export default function Canvas({
         editingComponentId={editingComponentId}
         editorHiddenLayerIds={editorHiddenLayerIds}
         editorBreakpoint={breakpoint}
+        zoom={zoom}
       />
     );
+  // selectedLayerId and hoveredLayerId are intentionally excluded from deps:
+  // SingleLayerRenderer subscribes to the store directly for selection state,
+  // so we don't need to re-render the entire iframe layer tree on selection changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     iframeReady,
     resolvedLayers,
     editingComponentId,
     editingComponentVariables,
-    selectedLayerId,
-    effectiveHoveredLayerId,
     pageId,
-    pageCollectionItem,
+    pageCollectionItem?.id,
+    enrichedPageCollectionItemData,
     handleLayerClick,
     onLayerUpdate,
     handleLayerHover,
@@ -458,6 +518,7 @@ export default function Canvas({
     liveComponentUpdates,
     editorHiddenLayerIds,
     breakpoint,
+    zoom,
   ]);
 
   // Handle keyboard events from iframe
@@ -588,20 +649,25 @@ export default function Canvas({
       const body = doc.body;
       if (!body) return;
 
-      // Component editing mode: measure actual content bounding box from children
+      // Component editing mode: measure bounding box of all visible layers
+      // including absolutely positioned elements that extend beyond in-flow content
       if (onContentWidthChange) {
         const canvasBody = doc.getElementById('canvas-body');
         if (canvasBody && canvasBody.children.length > 0) {
-          const bodyRect = canvasBody.getBoundingClientRect();
+          const bodyRect = body.getBoundingClientRect();
           let maxChildWidth = 0;
           let maxChildBottom = 0;
-          Array.from(canvasBody.children).forEach(child => {
-            const rect = (child as HTMLElement).getBoundingClientRect();
-            maxChildWidth = Math.max(maxChildWidth, rect.width);
+
+          const allLayers = canvasBody.querySelectorAll('[data-layer-id]');
+          allLayers.forEach(el => {
+            const rect = (el as HTMLElement).getBoundingClientRect();
+            if (rect.width === 0 && rect.height === 0) return;
+            maxChildWidth = Math.max(maxChildWidth, rect.right - bodyRect.left);
             maxChildBottom = Math.max(maxChildBottom, rect.bottom - bodyRect.top);
           });
+
           onContentWidthChange(maxChildWidth);
-          onContentHeightChange(maxChildBottom);
+          onContentHeightChange(Math.max(maxChildBottom, 100));
           return;
         }
       }

@@ -15,28 +15,26 @@ import type { Setting } from '@/types';
  * @returns True if CSS was updated, false if unchanged or missing
  */
 export async function syncCSS(direction: 'publish' | 'revert' = 'publish'): Promise<boolean> {
-  try {
-    const { draft_css: draftCSS, published_css: publishedCSS } =
-      await getSettingsByKeys(['draft_css', 'published_css']);
+  const { draft_css: draftCSS, published_css: publishedCSS } =
+    await getSettingsByKeys(['draft_css', 'published_css']);
 
-    const sourceCSS = direction === 'publish' ? draftCSS : publishedCSS;
-    const targetCSS = direction === 'publish' ? publishedCSS : draftCSS;
-    const targetKey = direction === 'publish' ? 'published_css' : 'draft_css';
+  const sourceCSS = direction === 'publish' ? draftCSS : publishedCSS;
+  const targetCSS = direction === 'publish' ? publishedCSS : draftCSS;
+  const targetKey = direction === 'publish' ? 'published_css' : 'draft_css';
 
-    if (!sourceCSS) {
-      return false;
+  if (!sourceCSS) {
+    if (direction === 'publish') {
+      throw new Error('draft_css is empty — open the builder to generate CSS before publishing');
     }
-
-    if (sourceCSS === targetCSS) {
-      return false;
-    }
-
-    await setSetting(targetKey, sourceCSS);
-    return true;
-  } catch (error) {
-    console.error(`Failed to ${direction} CSS:`, error);
     return false;
   }
+
+  if (sourceCSS === targetCSS) {
+    return false;
+  }
+
+  await setSetting(targetKey, sourceCSS);
+  return true;
 }
 
 /** @deprecated Use syncCSS('publish') instead */

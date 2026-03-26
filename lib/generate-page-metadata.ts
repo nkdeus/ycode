@@ -14,6 +14,7 @@ import { resolveInlineVariables, resolveImageUrl } from '@/lib/resolve-cms-varia
 import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { getAssetById } from '@/lib/repositories/assetRepository';
 import { getAssetProxyUrl } from '@/lib/asset-utils';
+import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 
 /**
  * Global page render settings fetched once per page render
@@ -23,6 +24,7 @@ export interface GlobalPageSettings {
   globalCanonicalUrl?: string | null;
   gaMeasurementId?: string | null;
   publishedCss?: string | null;
+  colorVariablesCss?: string | null;
   globalCustomCodeHead?: string | null;
   globalCustomCodeBody?: string | null;
   ycodeBadge?: boolean;
@@ -49,6 +51,10 @@ export interface GenerateMetadataOptions {
   pagePath?: string;
   /** Pre-fetched global SEO settings (avoids duplicate fetches) */
   globalSeoSettings?: GlobalSeoSettings;
+  /** Tenant ID for multi-tenant deployments */
+  tenantId?: string;
+  /** Primary domain URL (e.g. https://example.com) for metadataBase */
+  primaryDomainUrl?: string;
 }
 
 /**
@@ -95,11 +101,14 @@ export const fetchGlobalPageSettings = cache(async (): Promise<GlobalPageSetting
     }
   }
 
+  const colorVariablesCss = await generateColorVariablesCss();
+
   return {
     googleSiteVerification: settings.google_site_verification || null,
     globalCanonicalUrl: settings.global_canonical_url || null,
     gaMeasurementId: settings.ga_measurement_id || null,
     publishedCss: settings.published_css || null,
+    colorVariablesCss,
     globalCustomCodeHead: settings.custom_code_head || null,
     globalCustomCodeBody: settings.custom_code_body || null,
     ycodeBadge: settings.ycode_badge ?? true,
@@ -124,7 +133,7 @@ export async function generatePageMetadata(
   page: Page,
   options: GenerateMetadataOptions = {}
 ): Promise<Metadata> {
-  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath } = options;
+  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath, primaryDomainUrl } = options;
 
   const seo = page.settings?.seo;
   const isErrorPage = page.error_page !== null;
@@ -150,9 +159,25 @@ export async function generatePageMetadata(
     description,
   };
 
+  // Resolve the site base URL for making relative URLs absolute.
+  // URL objects don't survive unstable_cache serialization, so we resolve
+  // absolute URLs as strings here instead of relying on metadataBase.
+  let siteBaseUrl: string | null = null;
+
   // Use pre-fetched global SEO settings or fetch if not provided (skip for preview mode)
   if (!isPreview) {
     const seoSettings = options.globalSeoSettings || await fetchGlobalSeoSettings();
+
+    siteBaseUrl = (
+      seoSettings.globalCanonicalUrl
+      || primaryDomainUrl
+      || process.env.NEXT_PUBLIC_SITE_URL
+      || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null)
+      || null
+    );
+    if (siteBaseUrl) {
+      siteBaseUrl = siteBaseUrl.replace(/\/$/, '');
+    }
 
     // Add Google Site Verification meta tag
     if (seoSettings.googleSiteVerification) {
@@ -189,7 +214,12 @@ export async function generatePageMetadata(
   // Add Open Graph and Twitter Card metadata (not for error pages)
   if (seo?.image && !isErrorPage) {
     // Resolve image URL (handles both Asset ID string and FieldVariable)
-    const imageUrl = await resolveImageUrl(seo.image, collectionItem);
+    let imageUrl = await resolveImageUrl(seo.image, collectionItem);
+
+    // Make relative URLs absolute — social crawlers require absolute og:image URLs
+    if (imageUrl && imageUrl.startsWith('/') && siteBaseUrl) {
+      imageUrl = `${siteBaseUrl}${imageUrl}`;
+    }
 
     if (imageUrl) {
       metadata.openGraph = {

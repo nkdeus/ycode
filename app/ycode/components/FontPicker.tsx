@@ -269,7 +269,12 @@ export default function FontPicker({ value, onChange }: FontPickerProps) {
         case 'sans': return 'ui-sans-serif, system-ui, sans-serif';
         case 'serif': return 'ui-serif, Georgia, serif';
         case 'mono': return 'ui-monospace, monospace';
-        default: return 'sans-serif';
+        default: {
+          const fallback = font.category === 'serif' ? 'serif'
+            : font.category === 'monospace' ? 'monospace'
+              : 'sans-serif';
+          return `'${font.family}', ${fallback}`;
+        }
       }
     }
     const fallback = font.category === 'serif' ? 'serif'

@@ -75,6 +75,8 @@ export function extractInlineNodesFromRichText(
     } else if (node.type === 'richTextComponent') {
       // Preserve embedded component nodes as-is for block rendering
       result.push(node);
+    } else if (node.type === 'horizontalRule') {
+      result.push(node);
     } else if (node.type === 'listItem') {
       // List items should be handled by their parent list
       // But if we encounter one directly, extract its content
@@ -114,7 +116,7 @@ export function contentHasBlockElements(content: any): boolean {
   // Handle Tiptap doc structure
   if (content.type === 'doc' && Array.isArray(content.content)) {
     return content.content.some((block: any) =>
-      block.type === 'bulletList' || block.type === 'orderedList' || block.type === 'richTextComponent'
+      block.type === 'bulletList' || block.type === 'orderedList' || block.type === 'richTextComponent' || block.type === 'horizontalRule'
     );
   }
 
@@ -185,6 +187,43 @@ export function hasLinkOrComponent(node: any): boolean {
   return false;
 }
 
+/** Extract the first CMS field binding from Tiptap JSON content (dynamicVariable node with type 'field'). */
+export function getCmsFieldBinding(node: any): { field_id: string; label?: string; source?: 'page' | 'collection'; collection_layer_id?: string; field_type?: string | null } | null {
+  if (!node || typeof node !== 'object') return null;
+  if (node.type === 'dynamicVariable') {
+    const variable = node.attrs?.variable;
+    if (variable?.type === 'field' && variable.data?.field_id) {
+      return {
+        field_id: variable.data.field_id,
+        label: node.attrs?.label,
+        source: variable.data.source,
+        collection_layer_id: variable.data.collection_layer_id,
+        field_type: variable.data.field_type ?? null,
+      };
+    }
+  }
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) {
+      const result = getCmsFieldBinding(child);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+/** Check if content is exactly one CMS variable with no other nodes (doc > 1 paragraph > 1 dynamicVariable) */
+export function getSoleCmsFieldBinding(content: any): ReturnType<typeof getCmsFieldBinding> {
+  if (!content || content.type !== 'doc') return null;
+  const paragraphs = content.content;
+  if (!Array.isArray(paragraphs) || paragraphs.length !== 1) return null;
+  const paragraph = paragraphs[0];
+  if (paragraph.type !== 'paragraph') return null;
+  const nodes = paragraph.content;
+  if (!Array.isArray(nodes) || nodes.length !== 1) return null;
+  if (nodes[0].type !== 'dynamicVariable') return null;
+  return getCmsFieldBinding(nodes[0]);
+}
+
 /** Check if Tiptap JSON content contains components or inline variables (non-editable on canvas). */
 export function hasComponentOrVariable(node: any): boolean {
   if (!node || typeof node !== 'object') return false;
@@ -196,11 +235,22 @@ export function hasComponentOrVariable(node: any): boolean {
   return false;
 }
 
-/** Extract the rich-text content value from a layer's text variable. */
+/** Extract the rich-text content value from a layer's text variable.
+ *  Always returns TipTap JSON so consumers (RichTextEditor with
+ *  withFormatting=true) never receive a raw string they can't render. */
 export function getRichTextValue(variables?: { text?: { type: string; data: { content: any } } }): any {
   const textVar = variables?.text;
   if (textVar?.type === 'dynamic_rich_text') return textVar.data.content;
-  if (textVar?.type === 'dynamic_text') return textVar.data.content;
+  if (textVar?.type === 'dynamic_text') {
+    const content = textVar.data.content;
+    if (typeof content === 'string') {
+      return {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: content ? [{ type: 'text', text: content }] : [] }],
+      };
+    }
+    return content;
+  }
   return { type: 'doc', content: [{ type: 'paragraph' }] };
 }
 

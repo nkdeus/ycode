@@ -8,7 +8,7 @@ import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerH
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { generateImageSrcset, getImageSizes, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
-import { extractInlineNodesFromRichText, isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
+import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 
 // Pagination context passed through to resolveCollectionLayers
@@ -18,7 +18,10 @@ export interface PaginationContext {
   // Default page number for all collection layers (from URL ?page=N)
   defaultPage?: number;
 }
-import { resolveFieldLinkValue } from '@/lib/link-utils';
+
+import { resolveFieldLinkValue, resolveRefCollectionItemId, generateLinkHref } from '@/lib/link-utils';
+import type { LinkResolutionContext } from '@/lib/link-utils';
+import { getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/templates/utilities';
 import { resolveInlineVariables, resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { buildLayerTranslationKey, getTranslationByKey, hasValidTranslationValue, getTranslationValue } from '@/lib/localisation-utils';
@@ -368,9 +371,6 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
         }
 
         if (extractedSlug) {
-          // Found a matching dynamic page pattern
-          matchingPage = dynamicPage;
-
           // Fetch the collection item by slug value (supports translated slugs)
           const cmsSettings = dynamicPage.settings?.cms;
           if (cmsSettings?.collection_id && cmsSettings?.slug_field_id) {
@@ -393,9 +393,12 @@ export const fetchPageByPath = cache(async function fetchPageByPath(
             );
 
             if (!collectionItem) {
-              // Collection item not found for this slug
-              return null;
+              // Slug doesn't belong to this dynamic page's collection — try next
+              continue;
             }
+
+            // Found the matching dynamic page
+            matchingPage = dynamicPage;
 
             // Get layers for the dynamic page
             const { data: pageLayers, error: layersError } = await supabase
@@ -1287,11 +1290,12 @@ function resolveRichTextVariables(
         value = itemValues[fullPath];
       }
 
-      // Handle rich_text fields - inline the nested Tiptap content
+      // Handle rich_text fields - preserve block structure for proper rendering
       if (fieldType === 'rich_text' && isTiptapDoc(value)) {
-        const inlineNodes = extractInlineNodesFromRichText(value.content, content.marks || []);
-        // Recursively resolve any nested dynamic variables
-        return inlineNodes.map(node => resolveRichTextVariables(node, itemValues, layerDataMap));
+        const resolvedBlocks = value.content.map((block: any) =>
+          resolveRichTextVariables(block, itemValues, layerDataMap)
+        );
+        return resolvedBlocks.flat();
       }
 
       // Fallback for rich_text that's not a valid doc structure
@@ -1338,6 +1342,37 @@ function resolveRichTextVariables(
       result[key] = resolveRichTextVariables(content[key], itemValues, layerDataMap);
     } else {
       result[key] = content[key];
+    }
+  }
+
+  // When a rich_text variable expands inside a paragraph, the expansion
+  // produces block-level nodes (paragraphs, headings, components) inside
+  // the paragraph — lift them out so the parent doc gets proper blocks.
+  // Any surrounding inline nodes are grouped into new paragraphs.
+  if (result.type === 'paragraph' && Array.isArray(result.content)) {
+    const isBlockNode = (n: any) =>
+      n?.type === 'paragraph' || n?.type === 'heading' ||
+      n?.type === 'bulletList' || n?.type === 'orderedList' ||
+      n?.type === 'richTextComponent' || n?.type === 'richTextImage';
+    const hasBlockChildren = result.content.some(isBlockNode);
+    if (hasBlockChildren) {
+      const lifted: any[] = [];
+      let currentInline: any[] = [];
+      for (const node of result.content) {
+        if (isBlockNode(node)) {
+          if (currentInline.length > 0) {
+            lifted.push({ type: 'paragraph', content: currentInline });
+            currentInline = [];
+          }
+          lifted.push(node);
+        } else {
+          currentInline.push(node);
+        }
+      }
+      if (currentInline.length > 0) {
+        lifted.push({ type: 'paragraph', content: currentInline });
+      }
+      return lifted;
     }
   }
 
@@ -1545,8 +1580,9 @@ export async function resolveCollectionLayers(
     const layerDataMap = { ...parentLayerDataMap, ...(layer._layerDataMap || {}) };
     // Check if this is a collection layer
     const isCollectionLayer = !!layer.variables?.collection?.id;
+    const hasOptionsSource = layer.name === 'div' && !!layer.settings?.optionsSource?.collectionId;
 
-    if (isCollectionLayer) {
+    if (isCollectionLayer && !hasOptionsSource) {
       const collectionVariable = getCollectionVariable(layer);
 
       if (collectionVariable && collectionVariable.id) {
@@ -1955,6 +1991,118 @@ export async function resolveCollectionLayers(
         };
       } catch (error) {
         console.error(`Failed to resolve collection-sourced select options for layer ${layer.id}:`, error);
+      }
+    }
+
+    // Helper to find a specific input type in a layer's children tree
+    const findInputByType = (children: Layer[] | undefined, type: string): Layer | undefined => {
+      if (!children) return undefined;
+      for (const c of children) {
+        if (c.name === 'input' && c.attributes?.type === type) return c;
+        if (c.children) { const found = findInputByType(c.children, type); if (found) return found; }
+      }
+      return undefined;
+    };
+
+    // Build a _fragment layer from a collection-sourced input group (checkbox or radio)
+    const buildInputGroupFragment = (
+      inputType: 'checkbox' | 'radio',
+      items: { id: string; values: Record<string, string> }[],
+      fields: { id: string; type: string; key?: string | null; fillable?: boolean }[],
+    ): Layer => {
+      const opts = layer.settings!.optionsSource!;
+      const displayField = findDisplayField(fields as CollectionField[]);
+      const prefix = inputType === 'checkbox' ? 'cb' : 'rb';
+
+      if (opts.sortFieldId) {
+        const sortField = fields.find(f => f.id === opts.sortFieldId);
+        if (sortField) {
+          const dir = opts.sortOrder === 'desc' ? -1 : 1;
+          items = [...items].sort((a, b) => {
+            const aVal = String(a.values[sortField.id] ?? '');
+            const bVal = String(b.values[sortField.id] ?? '');
+            return aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' }) * dir;
+          });
+        }
+      }
+
+      const templateInput = findInputByType(layer.children, inputType);
+      const templateText = layer.children?.find(c => c.name === 'text');
+
+      const baseName = templateInput?.attributes?.name || templateInput?.settings?.id || layer.id;
+      const inputName = inputType === 'checkbox'
+        ? (baseName.endsWith('[]') ? baseName : `${baseName}[]`)
+        : baseName;
+
+      // Preserve template input attributes (required, disabled, etc.)
+      const { type: _t, name: _n, value: _v, checked: _c, ...inheritedInputAttrs } = templateInput?.attributes || {};
+
+      const generatedChildren: Layer[] = items.map(item => {
+        const label = displayField ? (item.values[displayField.id] || 'Untitled') : 'Untitled';
+        const isDefault = inputType === 'checkbox'
+          ? (opts.defaultItemIds || []).includes(item.id)
+          : opts.defaultItemId === item.id;
+
+        return {
+          id: `${layer.id}-${prefix}-${item.id}`,
+          name: 'div',
+          settings: { tag: 'label' },
+          classes: layer.classes || '',
+          children: [
+            {
+              id: `${layer.id}-${prefix}-${item.id}-input`,
+              name: 'input',
+              classes: templateInput?.classes || '',
+              attributes: {
+                ...inheritedInputAttrs,
+                type: inputType,
+                name: inputName,
+                value: item.id,
+                ...(isDefault ? { checked: 'true' } : {}),
+              },
+              design: templateInput?.design,
+            },
+            {
+              id: `${layer.id}-${prefix}-${item.id}-text`,
+              name: 'text',
+              classes: templateText?.classes || '',
+              design: templateText?.design,
+              variables: {
+                text: { type: 'dynamic_text' as const, data: { content: String(label) } },
+              },
+            },
+          ],
+        } as Layer;
+      });
+
+      const { collection: _col, ...restVariables } = layer.variables || {};
+      return {
+        ...layer,
+        id: `${layer.id}-fragment`,
+        name: '_fragment',
+        classes: [],
+        design: undefined,
+        attributes: {} as Record<string, any>,
+        variables: Object.keys(restVariables).length > 0 ? restVariables : undefined,
+        children: generatedChildren,
+      };
+    };
+
+    // Collection-sourced checkbox/radio group: replace children with inputs from a collection
+    if (layer.name === 'div' && layer.settings?.optionsSource?.collectionId) {
+      const inputType = findInputByType(layer.children, 'checkbox') ? 'checkbox'
+        : findInputByType(layer.children, 'radio') ? 'radio'
+          : null;
+
+      if (inputType) {
+        try {
+          const sourceCollectionId = layer.settings.optionsSource.collectionId;
+          const { items } = await getItemsWithValues(sourceCollectionId, isPublished);
+          const fields = await getFieldsByCollectionId(sourceCollectionId, isPublished);
+          return buildInputGroupFragment(inputType, items, fields);
+        } catch (error) {
+          console.error(`Failed to resolve collection-sourced ${inputType} options for layer ${layer.id}:`, error);
+        }
       }
     }
 
@@ -2646,7 +2794,7 @@ async function resolveAllAssets(
   layers: Layer[],
   isPublished: boolean = true,
   components?: Component[],
-): Promise<{ layers: Layer[]; assetMap: Record<string, { public_url: string | null; content?: string | null }> }> {
+): Promise<{ layers: Layer[]; assetMap: Record<string, { public_url: string | null; content?: string | null; width?: number | null; height?: number | null }> }> {
   const { getAssetsByIds } = await import('@/lib/repositories/assetRepository');
 
   // Step 1: Collect all asset IDs from the layer tree
@@ -2674,9 +2822,11 @@ async function resolveAllAssets(
  */
 function resolveLayerAssets(
   layer: Layer,
-  assetMap: Record<string, { public_url: string | null; content?: string | null }>,
+  assetMap: Record<string, { public_url: string | null; content?: string | null; width?: number | null; height?: number | null }>,
 ): Layer {
   const variableUpdates: Partial<Layer['variables']> = {};
+
+  let attributeUpdates: Record<string, any> | undefined;
 
   const imageSrc = layer.variables?.image?.src;
   if (imageSrc && isAssetVariable(imageSrc)) {
@@ -2693,6 +2843,15 @@ function resolveLayerAssets(
         src: createDynamicTextVariable(resolvedUrl),
         alt: layer.variables?.image?.alt || createDynamicTextVariable(''),
       };
+
+      // Store intrinsic dimensions from asset for CLS prevention
+      if (asset?.width && asset?.height) {
+        attributeUpdates = {
+          ...(layer.attributes || {}),
+          ...(!layer.attributes?.width && { width: String(asset.width) }),
+          ...(!layer.attributes?.height && { height: String(asset.height) }),
+        };
+      }
     }
   }
 
@@ -2756,15 +2915,57 @@ function resolveLayerAssets(
     }
   }
 
+  // Resolve richTextImage src URLs inside Tiptap content
+  const textVar = layer.variables?.text;
+  if (textVar && 'type' in textVar && textVar.type === 'dynamic_rich_text') {
+    const resolvedContent = resolveRichTextImageAssets((textVar as any).data?.content, assetMap);
+    if (resolvedContent !== (textVar as any).data?.content) {
+      variableUpdates.text = {
+        ...textVar,
+        data: { ...(textVar as any).data, content: resolvedContent },
+      } as any;
+    }
+  }
+
   const updates: Partial<Layer> = {};
   if (Object.keys(variableUpdates).length > 0) {
     updates.variables = { ...layer.variables, ...variableUpdates };
+  }
+  if (attributeUpdates) {
+    updates.attributes = attributeUpdates;
   }
   if (layer.children) {
     updates.children = layer.children.map(child => resolveLayerAssets(child, assetMap));
   }
 
   return Object.keys(updates).length > 0 ? { ...layer, ...updates } : layer;
+}
+
+/** Recursively resolve richTextImage asset URLs in Tiptap JSON content. */
+function resolveRichTextImageAssets(
+  node: any,
+  assetMap: Record<string, { public_url: string | null; content?: string | null }>,
+): any {
+  if (!node || typeof node !== 'object') return node;
+
+  if (node.type === 'richTextImage' && node.attrs?.assetId) {
+    const asset = assetMap[node.attrs.assetId];
+    if (asset?.public_url) {
+      return { ...node, attrs: { ...node.attrs, src: asset.public_url } };
+    }
+  }
+
+  if (Array.isArray(node.content)) {
+    let changed = false;
+    const newContent = node.content.map((child: any) => {
+      const resolved = resolveRichTextImageAssets(child, assetMap);
+      if (resolved !== child) changed = true;
+      return resolved;
+    });
+    if (changed) return { ...node, content: newContent };
+  }
+
+  return node;
 }
 
 /**
@@ -2808,6 +3009,7 @@ function renderTiptapToHtml(
   content: any,
   textStyles?: Record<string, any>,
   renderComponentHtml?: RenderComponentHtmlFn,
+  linkContext?: LinkResolutionContext,
 ): string {
   if (!content || typeof content !== 'object') {
     return '';
@@ -2850,6 +3052,21 @@ function renderTiptapToHtml(
               text = `<a href="${escapeHtml(mark.attrs.href)}"${target}${rel}${classAttr}>${text}</a>`;
             }
             break;
+          case 'richTextLink': {
+            const rtLinkSettings = getLinkSettingsFromMark(mark.attrs || {});
+            if (rtLinkSettings.type && linkContext) {
+              const href = generateLinkHref(rtLinkSettings, linkContext);
+              if (href) {
+                const target = mark.attrs.target ? ` target="${escapeHtml(mark.attrs.target)}"` : '';
+                const rel = mark.attrs.rel
+                  ? ` rel="${escapeHtml(mark.attrs.rel)}"`
+                  : (mark.attrs.target === '_blank' ? ' rel="noopener noreferrer"' : '');
+                const download = mark.attrs.download ? ' download' : '';
+                text = `<a href="${escapeHtml(href)}"${target}${rel}${download}${classAttr}>${text}</a>`;
+              }
+            }
+            break;
+          }
           case 'dynamicStyle': {
             // Handle dynamic styles (headings, paragraphs, custom styles)
             const styleKeys: string[] = mark.attrs?.styleKeys || [];
@@ -2880,7 +3097,7 @@ function renderTiptapToHtml(
     const paragraphClass = mergedStyles?.paragraph?.classes || '';
     // Empty paragraphs use non-breaking space to preserve the empty line
     const innerHtml = content.content && content.content.length > 0
-      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml)).join('')
+      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('')
       : '\u00A0';
     // Wrap in span with paragraph styles for proper block display
     return `<span class="${escapeHtml(paragraphClass)}">${innerHtml}</span>`;
@@ -2894,7 +3111,7 @@ function renderTiptapToHtml(
     const headingClass = mergedStyles?.[styleKey]?.classes || '';
     // Empty headings use non-breaking space to preserve the empty line
     const innerHtml = content.content && content.content.length > 0
-      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml)).join('')
+      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('')
       : '\u00A0';
     // Use span to avoid nesting issues (h1 inside p is invalid)
     return `<span class="${escapeHtml(headingClass)}">${innerHtml}</span>`;
@@ -2902,7 +3119,7 @@ function renderTiptapToHtml(
 
   // Handle doc (root)
   if (content.type === 'doc' && Array.isArray(content.content)) {
-    return content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml)).join('');
+    return content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('');
   }
 
   // Handle bullet list
@@ -2910,7 +3127,7 @@ function renderTiptapToHtml(
     const listClass = textStyles?.bulletList?.classes || '';
     const classAttr = listClass ? ` class="${escapeHtml(listClass)}"` : '';
     const items = content.content
-      ? content.content.map((item: any) => renderTiptapToHtml(item, textStyles, renderComponentHtml)).join('')
+      ? content.content.map((item: any) => renderTiptapToHtml(item, textStyles, renderComponentHtml, linkContext)).join('')
       : '';
     return `<ul${classAttr}>${items}</ul>`;
   }
@@ -2920,7 +3137,7 @@ function renderTiptapToHtml(
     const listClass = textStyles?.orderedList?.classes || '';
     const classAttr = listClass ? ` class="${escapeHtml(listClass)}"` : '';
     const items = content.content
-      ? content.content.map((item: any) => renderTiptapToHtml(item, textStyles, renderComponentHtml)).join('')
+      ? content.content.map((item: any) => renderTiptapToHtml(item, textStyles, renderComponentHtml, linkContext)).join('')
       : '';
     return `<ol${classAttr}>${items}</ol>`;
   }
@@ -2928,7 +3145,7 @@ function renderTiptapToHtml(
   // Handle list item
   if (content.type === 'listItem') {
     const innerHtml = content.content
-      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml)).join('')
+      ? content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('')
       : '';
     return `<li>${innerHtml}</li>`;
   }
@@ -2936,6 +3153,15 @@ function renderTiptapToHtml(
   // Handle hardBreak
   if (content.type === 'hardBreak') {
     return '<br>';
+  }
+
+  // Handle rich-text images
+  if (content.type === 'richTextImage') {
+    const src = content.attrs?.src ? escapeHtml(content.attrs.src) : '';
+    const alt = content.attrs?.alt ? escapeHtml(content.attrs.alt) : '';
+    const imgClass = textStyles?.richTextImage?.classes || '';
+    const classAttr = imgClass ? ` class="${escapeHtml(imgClass)}"` : '';
+    return `<img src="${src}" alt="${alt}"${classAttr} />`;
   }
 
   // Handle embedded component blocks
@@ -2952,7 +3178,7 @@ function renderTiptapToHtml(
 
   // Fallback: recursively process content
   if (Array.isArray(content.content)) {
-    return content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml)).join('');
+    return content.content.map((node: any) => renderTiptapToHtml(node, textStyles, renderComponentHtml, linkContext)).join('');
   }
 
   return '';
@@ -2973,17 +3199,18 @@ function layerToHtml(
   anchorMap?: Record<string, string>,
   collectionItemData?: Record<string, string>,
   pageCollectionItemData?: Record<string, string>,
-  assetMap?: Record<string, { public_url: string | null; content?: string | null }>,
+  assetMap?: Record<string, { public_url: string | null; content?: string | null; width?: number | null; height?: number | null }>,
   layerDataMap?: Record<string, Record<string, string>>,
   components?: Component[],
   ancestorComponentIds?: Set<string>,
+  isSlideChild?: boolean,
 ): string {
   // Handle fragment layers (created by resolveCollectionLayers for nested collections)
   // Fragments render their children directly without a wrapper element
   if (layer.name === '_fragment' && layer.children) {
     return layer.children
       .map((child) =>
-        layerToHtml(child, collectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, collectionItemData, pageCollectionItemData, assetMap, layerDataMap, components, ancestorComponentIds)
+        layerToHtml(child, collectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, collectionItemData, pageCollectionItemData, assetMap, layerDataMap, components, ancestorComponentIds, isSlideChild)
       )
       .join('');
   }
@@ -3030,6 +3257,10 @@ function layerToHtml(
     classesStr = classesStr
       ? `${classesStr} ${SWIPER_CLASS_MAP[layer.name]}`
       : SWIPER_CLASS_MAP[layer.name];
+  }
+
+  if (isSlideChild) {
+    classesStr = classesStr ? `${classesStr} swiper-slide` : 'swiper-slide';
   }
 
   // Build attributes
@@ -3146,37 +3377,47 @@ function layerToHtml(
   // Handle images (variables structure)
   if (tag === 'img') {
     const imageSrc = layer.variables?.image?.src;
+    let resolvedSrcValue: string | undefined;
     if (imageSrc) {
-      // Extract string value from variable (should be DynamicTextVariable after resolution)
-      // AssetVariable should have been resolved to DynamicTextVariable in injectCollectionDataForHtml
-      let srcValue: string | undefined = undefined;
       if (imageSrc.type === 'dynamic_text') {
-        srcValue = imageSrc.data.content || undefined;
+        resolvedSrcValue = imageSrc.data.content || undefined;
       } else if (imageSrc.type === 'asset') {
-        // AssetVariable should have been resolved, but if not, skip (don't use asset_id as URL)
-        srcValue = undefined;
+        resolvedSrcValue = undefined;
       }
-      // Only add src if we have a valid URL (not empty string)
-      if (srcValue && srcValue.trim()) {
-        const optimizedSrc = getOptimizedImageUrl(srcValue, 1920, 1920, 85);
+      if (resolvedSrcValue && resolvedSrcValue.trim()) {
+        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, 85);
         attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
 
-        // Generate srcset for responsive images
-        const srcset = generateImageSrcset(srcValue);
+        const srcset = generateImageSrcset(resolvedSrcValue);
         if (srcset) {
           attrs.push(`srcset="${escapeHtml(srcset)}"`);
-          // Add sizes attribute for responsive images
           attrs.push(`sizes="${escapeHtml(getImageSizes())}"`);
         }
       }
     }
-    // Add data-layer-type for images
     attrs.push('data-layer-type="image"');
 
     const imageAlt = layer.variables?.image?.alt;
     if (imageAlt && imageAlt.type === 'dynamic_text') {
-      attrs.push(`alt="${escapeHtml(imageAlt.data.content)}"`);
+      const resolvedAlt = resolveInlineVariablesFromData(imageAlt.data.content, effectiveCollectionItemData, pageCollectionItemData, 'UTC', effectiveLayerDataMap);
+      attrs.push(`alt="${escapeHtml(resolvedAlt)}"`);
     }
+
+    // Set width/height from explicit attributes or intrinsic asset dimensions (prevents CLS)
+    let imgWidth = layer.attributes?.width as string | undefined;
+    let imgHeight = layer.attributes?.height as string | undefined;
+    if ((!imgWidth || !imgHeight) && resolvedSrcValue && assetMap) {
+      const matchedAsset = Object.values(assetMap).find(a => a.public_url === resolvedSrcValue);
+      if (matchedAsset?.width && matchedAsset?.height) {
+        if (!imgWidth) imgWidth = String(matchedAsset.width);
+        if (!imgHeight) imgHeight = String(matchedAsset.height);
+      }
+    }
+    if (imgWidth) attrs.push(`width="${escapeHtml(imgWidth)}"`);
+    if (imgHeight) attrs.push(`height="${escapeHtml(imgHeight)}"`);
+
+    const imgLoadingAttr = layer.attributes?.loading;
+    if (imgLoadingAttr) attrs.push(`loading="${escapeHtml(String(imgLoadingAttr))}"`);
   }
 
   // Handle YouTube video (VideoVariable with provider='youtube') - render as iframe
@@ -3208,7 +3449,7 @@ function layerToHtml(
       const childrenHtml = layer.children
         ? layer.children
           .map((child) =>
-            layerToHtml(child, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, ancestorComponentIds)
+            layerToHtml(child, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, ancestorComponentIds, layer.name === 'slides')
           )
           .join('')
         : '';
@@ -3349,11 +3590,19 @@ function layerToHtml(
               if (linkedPage.is_dynamic && linkSettings.page.collection_item_id && collectionItemSlugs) {
                 let itemSlug: string | undefined;
 
-                // Handle special "current" keywords - use the current collection item ID
+                // Handle special "current" keywords and reference field resolution
                 if (linkSettings.page.collection_item_id === 'current-page' ||
                     linkSettings.page.collection_item_id === 'current-collection') {
                   // Use the current collection item's slug (from effectiveCollectionItemId)
                   itemSlug = effectiveCollectionItemId ? collectionItemSlugs[effectiveCollectionItemId] : undefined;
+                } else if (linkSettings.page.collection_item_id.startsWith('ref-')) {
+                  // Resolve via reference field value from current item data
+                  const refItemId = resolveRefCollectionItemId(
+                    linkSettings.page.collection_item_id,
+                    pageCollectionItemData,
+                    effectiveCollectionItemData
+                  );
+                  itemSlug = refItemId ? collectionItemSlugs[refItemId] : undefined;
                 } else {
                   // Use the specific item slug
                   itemSlug = collectionItemSlugs[linkSettings.page.collection_item_id];
@@ -3534,7 +3783,7 @@ function layerToHtml(
   const childrenHtml = effectiveChildren
     ? effectiveChildren
       .map((child) =>
-        layerToHtml(child, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, ancestorComponentIds)
+        layerToHtml(child, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, ancestorComponentIds, layer.name === 'slides')
       )
       .join('')
     : '';
@@ -3566,11 +3815,23 @@ function layerToHtml(
             ? resolved.map(l => resolveLayerAssets(l, assetMap))
             : resolved;
           return withAssets
-            .map(l => layerToHtml(l, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, childAncestors))
+            .map(l => layerToHtml(l, effectiveCollectionItemId, pages, folders, collectionItemSlugs, locale, translations, anchorMap, effectiveCollectionItemData, pageCollectionItemData, assetMap, effectiveLayerDataMap, components, childAncestors, layer.name === 'slides'))
             .join('');
         }
         : undefined;
-      textContent = renderTiptapToHtml(textVariable.data.content, layer.textStyles, componentRenderer);
+      const richTextLinkContext: LinkResolutionContext = {
+        pages,
+        folders,
+        collectionItemSlugs,
+        collectionItemId: effectiveCollectionItemId,
+        collectionItemData: effectiveCollectionItemData,
+        pageCollectionItemData,
+        locale,
+        translations,
+        anchorMap,
+        layerDataMap: effectiveLayerDataMap,
+      };
+      textContent = renderTiptapToHtml(textVariable.data.content, layer.textStyles, componentRenderer, richTextLinkContext);
       isRichText = true;
     }
   }

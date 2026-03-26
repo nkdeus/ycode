@@ -363,21 +363,28 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
 
   // Step 8a: Remove published pages that would violate slug+folder+error_page unique
   // constraint (same slug/folder/error_page but different id – e.g. replaced/renamed page).
-  if (pagesToUpsert.length > 0) {
+  // Dynamic pages are excluded because the DB unique index skips them (is_dynamic = false)
+  // and they legitimately share the same '*' slug within a folder.
+  const publishedPageIdsDeletedInStep8a = new Set<string>();
+
+  const nonDynamicPagesToUpsert = pagesToUpsert.filter((p) => !p.is_dynamic);
+
+  if (nonDynamicPagesToUpsert.length > 0) {
     const slugKey = (p: { slug: string; page_folder_id: string | null; error_page: number | null }) =>
       `${p.slug}\t${p.page_folder_id ?? ''}\t${p.error_page ?? 0}`;
 
     // Map from slug key -> id that will occupy that slot after upsert
     const upsertKeyToId = new Map<string, string>();
-    for (const p of pagesToUpsert) {
+    for (const p of nonDynamicPagesToUpsert) {
       upsertKeyToId.set(slugKey(p), p.id);
     }
 
-    const slugsToCheck = [...new Set(pagesToUpsert.map((p) => p.slug))];
+    const slugsToCheck = [...new Set(nonDynamicPagesToUpsert.map((p) => p.slug))];
     const { data: conflictingPublished } = await client
       .from('pages')
       .select('id, slug, page_folder_id, error_page')
       .eq('is_published', true)
+      .eq('is_dynamic', false)
       .is('deleted_at', null)
       .in('slug', slugsToCheck);
 
@@ -392,6 +399,10 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
       .map((row) => row.id);
 
     if (idsToDelete.length > 0) {
+      for (const id of idsToDelete) {
+        publishedPageIdsDeletedInStep8a.add(id);
+      }
+
       // Delete page_layers first (FK constraint)
       const { error: layersDeleteError } = await client
         .from('page_layers')
@@ -438,17 +449,19 @@ export async function publishPages(pageIds: string[]): Promise<PublishPagesResul
   // Filter to pages that have a published version (either just upserted or already exists)
   const pageIdsForLayerPublish = validDraftPages
     .filter(draftPage => {
-      // Skip if parent folder check failed
+      // Skip if parent folder is not published (check both pre-existing and just-published)
       if (draftPage.page_folder_id) {
-        const publishedParent = publishedFoldersById.get(draftPage.page_folder_id);
-        if (!publishedParent) {
+        const folderAlreadyPublished = publishedFoldersById.has(draftPage.page_folder_id);
+        const folderJustPublished = foldersBeingPublished.has(draftPage.page_folder_id);
+        if (!folderAlreadyPublished && !folderJustPublished) {
           return false;
         }
       }
 
-      // Ensure page has a published version
+      // Ensure page has a published version (account for Step 8a deletions)
       const pageWasUpserted = pagesToUpsert.some(p => p.id === draftPage.id);
-      const pageAlreadyPublished = publishedPagesById.has(draftPage.id);
+      const pageAlreadyPublished = publishedPagesById.has(draftPage.id)
+        && !publishedPageIdsDeletedInStep8a.has(draftPage.id);
 
       return pageWasUpserted || pageAlreadyPublished;
     })

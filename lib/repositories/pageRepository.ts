@@ -962,15 +962,10 @@ export async function getUnpublishedPagesCount(): Promise<number> {
       continue;
     }
 
-    const pageMetadataChanged =
-      draft.content_hash && pub.content_hash
-        ? draft.content_hash !== pub.content_hash
-        : false;
+    const pageMetadataChanged = draft.content_hash !== pub.content_hash;
 
     const layersChanged =
-      draft.page_layers[0]?.content_hash && pub.layerHash
-        ? draft.page_layers[0].content_hash !== pub.layerHash
-        : false;
+      (draft.page_layers[0]?.content_hash ?? null) !== pub.layerHash;
 
     const folderChanged = draft.page_folder_id !== pub.page_folder_id;
 
@@ -1044,17 +1039,12 @@ export async function getUnpublishedPages(): Promise<Page[]> {
       continue;
     }
 
-    // Compare content hashes - check both page metadata and layers
-    // Only compare if both hashes exist (not null)
     const pageMetadataChanged =
-      draftPage.content_hash && publishedPageWithLayers.content_hash
-        ? draftPage.content_hash !== publishedPageWithLayers.content_hash
-        : false; // If either is null, consider them the same (no change)
+      draftPage.content_hash !== publishedPageWithLayers.content_hash;
 
     const layersChanged =
-      draftPage.page_layers[0]?.content_hash && publishedPageWithLayers.page_layers[0]?.content_hash
-        ? draftPage.page_layers[0].content_hash !== publishedPageWithLayers.page_layers[0].content_hash
-        : false; // If either is null, consider them the same (no change)
+      (draftPage.page_layers[0]?.content_hash ?? null) !==
+      (publishedPageWithLayers.page_layers[0]?.content_hash ?? null);
 
     // Check if page was moved to a different folder
     const folderChanged = draftPage.page_folder_id !== publishedPageWithLayers.page_folder_id;

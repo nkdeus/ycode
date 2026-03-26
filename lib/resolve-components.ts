@@ -172,7 +172,7 @@ function remapVariableCollectionLayerIds(vars: LayerVariables, idMap: Map<string
   if (vars.design) {
     let designChanged = false;
     const newDesign = { ...vars.design };
-    for (const key of ['backgroundColor', 'color', 'borderColor', 'divideColor', 'textDecorationColor'] as const) {
+    for (const key of ['backgroundColor', 'color', 'borderColor', 'divideColor', 'outlineColor', 'textDecorationColor'] as const) {
       if (vars.design[key]) {
         const r = remapDesignColor(vars.design[key], idMap);
         if (r !== vars.design[key]) { (newDesign as any)[key] = r; designChanged = true; }
@@ -250,6 +250,7 @@ type OverrideCategory = Exclude<keyof NonNullable<Layer['componentOverrides']>, 
 
 const OVERRIDE_CATEGORIES: OverrideCategory[] = [
   'text',
+  'rich_text',
   'image',
   'link',
   'audio',
@@ -330,9 +331,9 @@ export function applyComponentOverrides(
     // Check if this layer has a text variable linked
     const linkedTextVariableId = layer.variables?.text?.id;
     if (linkedTextVariableId) {
-      // Check for override first, then fall back to variable's default value
-      const overrideValue = overrides?.text?.[linkedTextVariableId];
       const variableDef = componentVariables?.find(v => v.id === linkedTextVariableId);
+      const overrideCategory = (variableDef?.type === 'rich_text' ? 'rich_text' : 'text') as OverrideCategory;
+      const overrideValue = overrides?.[overrideCategory]?.[linkedTextVariableId];
       const valueToApply = overrideValue ?? variableDef?.default_value;
 
       // Only apply if it's a text variable (has 'type' property, not ImageSettingsValue)

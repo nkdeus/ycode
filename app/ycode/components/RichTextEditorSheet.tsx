@@ -16,7 +16,7 @@ import {
 import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import RichTextEditor from './RichTextEditor';
 import type { CollectionField, Collection } from '@/types';
-import type { FieldGroup } from '@/lib/collection-field-utils';
+import { RICH_TEXT_FIELD_TYPES, type FieldGroup } from '@/lib/collection-field-utils';
 
 interface RichTextEditorSheetProps {
   open: boolean;
@@ -31,6 +31,8 @@ interface RichTextEditorSheetProps {
   fieldGroups?: FieldGroup[];
   allFields?: Record<string, CollectionField[]>;
   collections?: Collection[];
+  /** Hide "Current page item" and "Reference field" options */
+  hidePageContextOptions?: boolean;
 }
 
 export default function RichTextEditorSheet({
@@ -44,6 +46,7 @@ export default function RichTextEditorSheet({
   fieldGroups,
   allFields,
   collections,
+  hidePageContextOptions = false,
 }: RichTextEditorSheetProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -82,6 +85,8 @@ export default function RichTextEditorSheet({
           showFormattingToolbar={true}
           variant="full"
           fullHeight
+          allowedFieldTypes={RICH_TEXT_FIELD_TYPES}
+          hidePageContextOptions={hidePageContextOptions}
         />
       </SheetContent>
     </Sheet>

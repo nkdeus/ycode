@@ -16,7 +16,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import Icon, { type IconProps } from '@/components/ui/icon';
 import SettingsPanel from './SettingsPanel';
 import RichTextEditor from './RichTextEditor';
-import { filterFieldGroupsByType, flattenFieldGroups, LINK_FIELD_TYPES } from '@/lib/collection-field-utils';
+import { filterFieldGroupsByType, flattenFieldGroups, LINK_FIELD_TYPES, buildReferenceItemOptions } from '@/lib/collection-field-utils';
+import { generateLinkHref } from '@/lib/link-utils';
+import LinkItemOptions from './LinkItemOptions';
 import { FieldSelectDropdown, type FieldGroup, type FieldSourceType } from './CollectionFieldSelector';
 import ComponentVariableLabel, { VARIABLE_TYPE_ICONS } from './ComponentVariableLabel';
 import {
@@ -239,6 +241,12 @@ export default function LinkSettings(props: LinkSettingsProps) {
   const currentPage = currentPageId ? pages.find(p => p.id === currentPageId) : null;
   const isCurrentPageDynamic = currentPage?.is_dynamic || false;
 
+  // "Current page item" only makes sense when both pages use the same collection
+  const currentPageCollectionId = currentPage?.settings?.cms?.collection_id || null;
+  const targetPageCollectionId = selectedPage?.settings?.cms?.collection_id || null;
+  const canUseCurrentPageItem = isDynamicPage && isCurrentPageDynamic
+    && !!currentPageCollectionId && currentPageCollectionId === targetPageCollectionId;
+
   // Check if the layer itself is a collection layer
   const isCollectionLayer = !!(layer && getCollectionVariable(layer));
 
@@ -260,6 +268,12 @@ export default function LinkSettings(props: LinkSettingsProps) {
   const collectionGroup = fieldGroups?.find(g => g.source === 'collection');
   const hasCollectionFields = !!(collectionGroup && collectionGroup.fields.length > 0 && isInsideCollectionLayer);
   const canUseCurrentCollectionItem = hasCollectionFields || isCollectionLayer;
+
+  // Find reference fields that point to the target page's collection
+  const referenceItemOptions = useMemo(
+    () => buildReferenceItemOptions(isDynamicPage, targetPageCollectionId, fieldGroups),
+    [isDynamicPage, targetPageCollectionId, fieldGroups]
+  );
 
   // Get collection ID from dynamic page settings
   const pageCollectionId = selectedPage?.settings?.cms?.collection_id || null;
@@ -646,27 +660,10 @@ export default function LinkSettings(props: LinkSettingsProps) {
   // Get asset info for display
   const selectedAsset = assetId ? getAsset(assetId) : null;
 
-  // Get display name for selected collection item
-  const getItemDisplayName = useCallback(
-    (itemId: string) => {
-      if (itemId === 'current') return 'Current Item';
-      const item = collectionItems.find((i) => i.id === itemId);
-      if (!item) return itemId;
-
-      // Get fields from store for the page's collection
-      const collectionFields = pageCollectionId ? collectionsStoreFields[pageCollectionId] : [];
-
-      // Find the field with key === 'name'
-      const nameField = collectionFields?.find((field) => field.key === 'name');
-      if (nameField && item.values[nameField.id]) {
-        return item.values[nameField.id];
-      }
-
-      // Fall back to first available value
-      const values = Object.values(item.values);
-      return values[0] || itemId;
-    },
-    [collectionItems, pageCollectionId, collectionsStoreFields]
+  // Fields for the linked page's collection (for display names)
+  const linkedPageCollectionFields = useMemo(
+    () => pageCollectionId ? collectionsStoreFields[pageCollectionId] || [] : [],
+    [pageCollectionId, collectionsStoreFields]
   );
 
   // Layer mode requires a layer
@@ -903,28 +900,13 @@ export default function LinkSettings(props: LinkSettingsProps) {
                     <SelectValue placeholder={loadingItems ? 'Loading...' : 'Select...'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {/* Current page item option (when on a dynamic page AND linking to a dynamic page) */}
-                    {isDynamicPage && isCurrentPageDynamic && (
-                      <SelectItem value="current-page">
-                        <div className="flex items-center gap-2">
-                          Current page item
-                        </div>
-                      </SelectItem>
-                    )}
-                    {/* Current collection item option (when inside a collection layer OR when the layer IS a collection layer) */}
-                    {canUseCurrentCollectionItem && (
-                      <SelectItem value="current-collection">
-                        <div className="flex items-center gap-2">
-                          Current collection item
-                        </div>
-                      </SelectItem>
-                    )}
-                    {((isDynamicPage && isCurrentPageDynamic) || canUseCurrentCollectionItem) && <SelectSeparator />}
-                    {collectionItems.map((item) => (
-                      <SelectItem key={item.id} value={item.id}>
-                        {getItemDisplayName(item.id)}
-                      </SelectItem>
-                    ))}
+                    <LinkItemOptions
+                      canUseCurrentPageItem={canUseCurrentPageItem}
+                      canUseCurrentCollectionItem={canUseCurrentCollectionItem}
+                      referenceItemOptions={referenceItemOptions}
+                      collectionItems={collectionItems}
+                      collectionFields={linkedPageCollectionFields}
+                    />
                   </SelectContent>
                 </Select>
               </div>

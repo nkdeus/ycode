@@ -599,7 +599,6 @@ export default function HeaderBar({
           setIsPublishing={setIsPublishing}
           baseUrl={baseUrl}
           publishedUrl={publishedUrl}
-          isDisabled={isSettingsRoute}
           onPublishSuccess={onPublishSuccess}
         />
 

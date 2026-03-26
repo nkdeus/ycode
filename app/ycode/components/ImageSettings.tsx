@@ -33,7 +33,7 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { DEFAULT_ASSETS, ASSET_CATEGORIES, isAssetOfType } from '@/lib/asset-utils';
-import { IMAGE_FIELD_TYPES, filterFieldGroupsByType, flattenFieldGroups } from '@/lib/collection-field-utils';
+import { IMAGE_FIELD_TYPES, SIMPLE_TEXT_FIELD_TYPES, filterFieldGroupsByType, flattenFieldGroups } from '@/lib/collection-field-utils';
 import { toast } from 'sonner';
 import { Separator } from '@/components/ui/separator';
 
@@ -468,7 +468,10 @@ export default function ImageSettings(props: ImageSettingsProps) {
                 />
 
                 <div className="absolute inset-0 bg-black/50 flex items-center justify-center px-2 py-1 opacity-0 group-hover:opacity-100 z-20">
-                  <Button variant="overlay" size="sm">{assetFilename ? 'Change file' : 'Choose file'}</Button>
+                  <Button
+                    type="button" variant="overlay"
+                    size="sm"
+                  >{assetFilename ? 'Change file' : 'Choose file'}</Button>
                 </div>
               </div>
             </div>
@@ -530,6 +533,7 @@ export default function ImageSettings(props: ImageSettingsProps) {
             fieldGroups={fieldGroups}
             allFields={allFields}
             collections={collections}
+            allowedFieldTypes={SIMPLE_TEXT_FIELD_TYPES}
           />
         </div>
       </div>

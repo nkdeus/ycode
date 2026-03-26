@@ -18,6 +18,7 @@ import {
   resetBindingsAfterMove,
   resetBindingsForDeletedCollection,
   resetBindingsForDeletedField,
+  cleanLayersForComponentCreation,
 } from '../lib/layer-utils';
 import { generateId } from '../lib/utils';
 import { getDescendantFolderIds, isHomepage, findHomepage, findNextSelection } from '../lib/page-utils';
@@ -105,6 +106,25 @@ interface PagesActions {
 }
 
 type PagesStore = PagesState & PagesActions;
+
+/**
+ * Tracks pages that were just synced from MCP (server-side).
+ * The autosave watcher checks this to avoid overwriting MCP's DB writes
+ * with stale local state.
+ */
+const mcpSyncedPages = new Set<string>();
+
+export function markPageMcpSynced(pageId: string): void {
+  mcpSyncedPages.add(pageId);
+}
+
+export function consumePageMcpSync(pageId: string): boolean {
+  if (mcpSyncedPages.has(pageId)) {
+    mcpSyncedPages.delete(pageId);
+    return true;
+  }
+  return false;
+}
 
 function updateLayerInTree(tree: Layer[], layerId: string, updater: (l: Layer) => Layer): Layer[] {
   return tree.map((node) => {
@@ -2841,7 +2861,9 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
     const layerToCopy = copyLayer(pageId, layerId);
     if (!layerToCopy) return null;
 
-    const newComponent = await createComponentViaApi(componentName, [layerToCopy]);
+    // Strip CMS bindings that won't be valid inside a standalone component
+    const cleanedLayers = cleanLayersForComponentCreation([layerToCopy]);
+    const newComponent = await createComponentViaApi(componentName, cleanedLayers);
     if (!newComponent) return null;
 
     // Add to components store

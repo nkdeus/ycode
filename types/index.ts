@@ -94,6 +94,9 @@ export interface BordersDesign {
   divideY?: string;
   divideStyle?: string;
   divideColor?: string;
+  outlineWidth?: string;
+  outlineColor?: string;
+  outlineOffset?: string;
 }
 
 export interface BackgroundsDesign {
@@ -214,7 +217,8 @@ export interface LayerSettings {
   filterOnChange?: boolean; // For filter layers: trigger filtering on every input change (debounced)
   optionsSource?: {
     collectionId: string;
-    defaultItemId?: string; // item ID to pre-select as default
+    defaultItemId?: string; // item ID to pre-select as default (select elements)
+    defaultItemIds?: string[]; // item IDs to pre-check as defaults (checkbox groups)
     sortFieldId?: string; // field ID to sort options by (undefined = manual/insertion order)
     sortOrder?: 'asc' | 'desc'; // sort direction (defaults to 'asc')
   };
@@ -227,6 +231,7 @@ export interface LayerSettings {
 export interface LayerStyle {
   id: string;
   name: string;
+  group?: string; // Element category (e.g. "text", "block", "button") for scoped filtering
 
   // Style data
   classes: string;
@@ -287,6 +292,8 @@ export interface TextStyle {
   label?: string; // Display label for the style (e.g., "Bold", "Italic")
   classes?: string;
   design?: DesignProperties;
+  styleId?: string; // Layer style applied to this text style
+  styleOverrides?: { classes?: string; design?: DesignProperties };
 }
 
 export interface Layer {
@@ -348,6 +355,7 @@ export interface Layer {
   componentId?: string; // Reference to applied Component
   componentOverrides?: {
     text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (text)
+    rich_text?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (rich text)
     image?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (image)
     link?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (link)
     audio?: Record<string, ComponentVariableValue>; // ComponentVariable.id → override value (audio)
@@ -428,6 +436,7 @@ export interface LayerVariables {
     color?: DesignColorVariable; // text color
     borderColor?: DesignColorVariable;
     divideColor?: DesignColorVariable;
+    outlineColor?: DesignColorVariable;
     textDecorationColor?: DesignColorVariable;
     placeholderColor?: DesignColorVariable;
   };
@@ -538,7 +547,7 @@ export interface BlockTemplate {
 export interface ComponentVariable {
   id: string;        // Unique variable ID
   name: string;      // Display name (e.g., "Button title")
-  type?: 'text' | 'image' | 'link' | 'audio' | 'video' | 'icon'; // Variable type (defaults to 'text' for backwards compatibility)
+  type?: 'text' | 'rich_text' | 'image' | 'link' | 'audio' | 'video' | 'icon'; // Variable type (defaults to 'text' for backwards compatibility)
   placeholder?: string; // Placeholder text shown in text override inputs
   default_value?: ComponentVariableValue; // Default value
 }
@@ -1027,6 +1036,16 @@ export interface Setting {
   id: string;
   key: string;
   value: any;
+  created_at: string;
+  updated_at: string;
+}
+
+// Color Variables
+export interface ColorVariable {
+  id: string;
+  name: string;
+  value: string;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }

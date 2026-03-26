@@ -59,8 +59,8 @@ export const FIELD_TYPES_BY_CATEGORY = FIELD_TYPE_CATEGORIES.map(cat => ({
   types: FIELD_TYPES.filter(t => t.category === cat.id),
 }));
 
-/** Valid field type values for API validation */
-export const VALID_FIELD_TYPES: readonly string[] = FIELD_TYPES.map((t) => t.value);
+/** Valid field type values for API validation (includes system types like 'status') */
+export const VALID_FIELD_TYPES: readonly string[] = [...FIELD_TYPES.map((t) => t.value), 'status'];
 
 /** Check if a field type supports setting a default value */
 export function supportsDefaultValue(fieldType: CollectionFieldType | undefined): boolean {
@@ -446,7 +446,16 @@ export const AUDIO_FIELD_TYPES: CollectionFieldType[] = ['audio'];
 export const VIDEO_FIELD_TYPES: CollectionFieldType[] = ['video'];
 
 /** Field types that contain plain text values (for YouTube video IDs, etc.) */
-export const TEXT_FIELD_TYPES: CollectionFieldType[] = ['text'];
+export const VIDEO_ID_FIELD_TYPES: CollectionFieldType[] = ['text'];
+
+/** Field types that can be bound to simple text content (excludes rich_text and media/asset types) */
+export const SIMPLE_TEXT_FIELD_TYPES: CollectionFieldType[] = ['text', 'number', 'date', 'email', 'phone'];
+
+/** Field types that can be bound to rich text content (excludes media/asset types) */
+export const RICH_TEXT_FIELD_TYPES: CollectionFieldType[] = [...SIMPLE_TEXT_FIELD_TYPES, 'rich_text'];
+
+/** Field types for richText layer CMS bindings (only rich_text) */
+export const RICH_TEXT_ONLY_FIELD_TYPES: CollectionFieldType[] = ['rich_text'];
 
 /** Field types that can be bound to link layers for downloads (document fields) */
 export const DOCUMENT_FIELD_TYPES: CollectionFieldType[] = ['document'];
@@ -561,26 +570,63 @@ export function isVirtualAssetField(fieldId: string): boolean {
 }
 
 /**
+ * Checks recursively whether a reference field has at least one sub-field
+ * matching the allowed types (directly or via nested references).
+ */
+function referenceHasMatchingSubFields(
+  field: CollectionField,
+  allowedTypes: CollectionFieldType[],
+  allFields: Record<string, CollectionField[]>,
+  visited: Set<string> = new Set(),
+): boolean {
+  if (!field.reference_collection_id) return false;
+  if (visited.has(field.reference_collection_id)) return false;
+  visited.add(field.reference_collection_id);
+
+  const subFields = allFields[field.reference_collection_id] || [];
+  return subFields.some(f => {
+    if (f.type === 'multi_reference') return false;
+    if (allowedTypes.includes(f.type as CollectionFieldType)) return true;
+    if (f.type === 'reference') return referenceHasMatchingSubFields(f, allowedTypes, allFields, visited);
+    return false;
+  });
+}
+
+/**
  * Filter field groups to only include fields of specified types.
  * Returns empty array if no matching fields exist.
- * When options.excludeMultipleAsset is true, also excludes fields with multiple assets.
+ * - When options.excludeMultipleAsset is true, also excludes fields with multiple assets.
+ * - When options.allFields is provided, reference fields are only kept if their referenced
+ *   collection contains at least one field matching the allowed types (checked recursively).
  */
 export function filterFieldGroupsByType(
   fieldGroups: FieldGroup[] | undefined,
   allowedTypes: CollectionFieldType[],
-  options?: { excludeMultipleAsset?: boolean }
+  options?: { excludeMultipleAsset?: boolean; allFields?: Record<string, CollectionField[]> }
 ): FieldGroup[] {
   if (!fieldGroups || fieldGroups.length === 0) return [];
 
   return fieldGroups
-    .map(group => ({
-      ...group,
-      fields: group.fields.filter(field => {
+    .map(group => {
+      const fields = group.fields.filter(field => {
+        if (field.type === 'reference' && field.reference_collection_id) {
+          if (options?.allFields) {
+            return referenceHasMatchingSubFields(field, allowedTypes, options.allFields);
+          }
+          return true;
+        }
         if (!allowedTypes.includes(field.type)) return false;
         if (options?.excludeMultipleAsset && isMultipleAssetField(field)) return false;
         return true;
-      }),
-    }))
+      });
+      // References always appear after regular fields
+      fields.sort((a, b) => {
+        const aIsRef = a.type === 'reference' ? 1 : 0;
+        const bIsRef = b.type === 'reference' ? 1 : 0;
+        return aIsRef - bIsRef;
+      });
+      return { ...group, fields };
+    })
     .filter(group => group.fields.length > 0);
 }
 
@@ -589,6 +635,42 @@ export function filterFieldGroupsByType(
  */
 export function flattenFieldGroups(fieldGroups: FieldGroup[] | undefined): CollectionField[] {
   return fieldGroups?.flatMap(g => g.fields) || [];
+}
+
+/** Prefix for reference-field-based collection item resolution (page source) */
+export const REF_PAGE_PREFIX = 'ref-page:';
+/** Prefix for reference-field-based collection item resolution (collection source) */
+export const REF_COLLECTION_PREFIX = 'ref-collection:';
+
+/** A resolved option for a reference field pointing to a specific CMS page collection. */
+export interface ReferenceItemOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * Build select options for reference fields that point to a given target collection.
+ * Used in link settings dropdowns to offer "Category - Reference field" style options.
+ */
+export function buildReferenceItemOptions(
+  isDynamicPage: boolean,
+  targetPageCollectionId: string | null,
+  fieldGroups: FieldGroup[] | undefined
+): ReferenceItemOption[] {
+  if (!isDynamicPage || !targetPageCollectionId || !fieldGroups) return [];
+  const options: ReferenceItemOption[] = [];
+  for (const group of fieldGroups) {
+    const prefix = group.source === 'page' ? REF_PAGE_PREFIX : REF_COLLECTION_PREFIX;
+    for (const field of group.fields) {
+      if (field.type === 'reference' && field.reference_collection_id === targetPageCollectionId) {
+        options.push({
+          value: `${prefix}${field.id}`,
+          label: `${field.name} - Reference field`,
+        });
+      }
+    }
+  }
+  return options;
 }
 
 /**

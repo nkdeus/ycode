@@ -30,7 +30,7 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { useAssetsStore } from '@/stores/useAssetsStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { ASSET_CATEGORIES, isAssetOfType, DEFAULT_ASSETS } from '@/lib/asset-utils';
-import { VIDEO_FIELD_TYPES, TEXT_FIELD_TYPES, filterFieldGroupsByType, flattenFieldGroups } from '@/lib/collection-field-utils';
+import { VIDEO_FIELD_TYPES, VIDEO_ID_FIELD_TYPES, filterFieldGroupsByType, flattenFieldGroups } from '@/lib/collection-field-utils';
 import { toast } from 'sonner';
 import Icon from '@/components/ui/icon';
 import { Input } from '@/components/ui/input';
@@ -204,7 +204,7 @@ export default function VideoSettings(props: VideoSettingsProps) {
 
   // Filter field groups to only show text fields (for YouTube Video ID)
   const textFieldGroups = useMemo(() => {
-    return filterFieldGroupsByType(fieldGroups, TEXT_FIELD_TYPES);
+    return filterFieldGroupsByType(fieldGroups, VIDEO_ID_FIELD_TYPES);
   }, [fieldGroups]);
 
   const handleFieldSelect = useCallback((

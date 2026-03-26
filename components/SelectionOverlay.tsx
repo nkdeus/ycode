@@ -26,11 +26,11 @@ interface SelectionOverlayProps {
   parentLayerId: string | null;
   /** Current zoom level (percentage) */
   zoom: number;
+  /** Active sublayer index within a richText element (null = highlight whole layer) */
+  activeSublayerIndex?: number | null;
+  /** Active list item index within a list (null = highlight whole list block) */
+  activeListItemIndex?: number | null;
 }
-
-const SELECTED_OUTLINE_CLASS = 'outline outline-1 outline-blue-500';
-const HOVERED_OUTLINE_CLASS = 'outline outline-1 outline-blue-400/50';
-const PARENT_OUTLINE_CLASS = 'outline outline-1 outline-dashed outline-blue-400';
 
 export function SelectionOverlay({
   iframeElement,
@@ -39,7 +39,21 @@ export function SelectionOverlay({
   hoveredLayerId,
   parentLayerId,
   zoom,
+  activeSublayerIndex,
+  activeListItemIndex,
 }: SelectionOverlayProps) {
+  const activeUIState = useEditorStore((state) => state.activeUIState);
+  const isStateActive = activeUIState !== 'neutral';
+
+  const SELECTED_OUTLINE_CLASS = isStateActive
+    ? 'outline outline-1 outline-[#8dd92f]'
+    : 'outline outline-1 outline-blue-500';
+  const HOVERED_OUTLINE_CLASS = isStateActive
+    ? 'outline outline-1 outline-[#8dd92f]/50'
+    : 'outline outline-1 outline-blue-400/50';
+  const PARENT_OUTLINE_CLASS = isStateActive
+    ? 'outline outline-1 outline-dashed outline-[#8dd92f]'
+    : 'outline outline-1 outline-dashed outline-blue-400';
   // Container refs for outline groups (supports multiple instances per layer ID)
   const selectedContainerRef = useRef<HTMLDivElement>(null);
   const hoveredContainerRef = useRef<HTMLDivElement>(null);
@@ -64,6 +78,8 @@ export function SelectionOverlay({
     containerElement: HTMLElement,
     scale: number,
     outlineClass: string,
+    blockIndex?: number | null,
+    listItemIndex?: number | null,
   ) => {
     if (!container) return;
 
@@ -72,7 +88,16 @@ export function SelectionOverlay({
       return;
     }
 
-    const targetElements = iframeDoc.querySelectorAll(`[data-layer-id="${layerId}"]`);
+    let targetElements: NodeListOf<Element>;
+    if (blockIndex !== undefined && blockIndex !== null && listItemIndex !== undefined && listItemIndex !== null) {
+      targetElements = iframeDoc.querySelectorAll(
+        `[data-layer-id="${layerId}"] [data-block-index="${blockIndex}"] [data-list-item-index="${listItemIndex}"]`
+      );
+    } else if (blockIndex !== undefined && blockIndex !== null) {
+      targetElements = iframeDoc.querySelectorAll(`[data-layer-id="${layerId}"] [data-block-index="${blockIndex}"]`);
+    } else {
+      targetElements = iframeDoc.querySelectorAll(`[data-layer-id="${layerId}"]`);
+    }
     if (targetElements.length === 0) {
       container.style.display = 'none';
       return;
@@ -103,6 +128,7 @@ export function SelectionOverlay({
       const width = elementRect.width * scale;
       const height = elementRect.height * scale;
 
+      child.className = `absolute ${outlineClass}`;
       child.style.display = 'block';
       child.style.top = `${top}px`;
       child.style.left = `${left}px`;
@@ -133,17 +159,19 @@ export function SelectionOverlay({
 
     // Update selected outline (skip during drag)
     if (!skipSolidBorders) {
-      updateOutline(selectedContainerRef.current, selectedLayerId, iframeDoc, iframeElement, containerElement, scale, SELECTED_OUTLINE_CLASS);
+      updateOutline(selectedContainerRef.current, selectedLayerId, iframeDoc, iframeElement, containerElement, scale, SELECTED_OUTLINE_CLASS, activeSublayerIndex, activeListItemIndex);
 
       // Update hovered outline (only if different from selected)
       const effectiveHoveredId = hoveredLayerId !== selectedLayerId ? hoveredLayerId : null;
       updateOutline(hoveredContainerRef.current, effectiveHoveredId, iframeDoc, iframeElement, containerElement, scale, HOVERED_OUTLINE_CLASS);
     }
 
-    // Update parent outline (only if different from selected) - always visible
-    const effectiveParentId = parentLayerId !== selectedLayerId ? parentLayerId : null;
+    // When a sublayer is active, show the parent richText layer with parent outline
+    const effectiveParentId = activeSublayerIndex !== null && activeSublayerIndex !== undefined
+      ? selectedLayerId
+      : (parentLayerId !== selectedLayerId ? parentLayerId : null);
     updateOutline(parentContainerRef.current, effectiveParentId, iframeDoc, iframeElement, containerElement, scale, PARENT_OUTLINE_CLASS);
-  }, [iframeElement, containerElement, selectedLayerId, hoveredLayerId, parentLayerId, zoom, updateOutline, hideAllOutlines]);
+  }, [iframeElement, containerElement, selectedLayerId, hoveredLayerId, parentLayerId, zoom, updateOutline, hideAllOutlines, activeSublayerIndex, activeListItemIndex]);
 
   // Initial update and updates when IDs change
   useEffect(() => {
@@ -179,23 +207,25 @@ export function SelectionOverlay({
     let mutationTimeout: ReturnType<typeof setTimeout> | null = null;
     let mutationRafId: number | null = null;
     const mutationObserver = new MutationObserver((mutations) => {
-      // Check if any mutation is a structural change (element added/removed)
       const hasStructuralChange = mutations.some(m => m.type === 'childList');
 
+      // Cancel any pending updates to avoid double-firing
+      if (mutationTimeout) clearTimeout(mutationTimeout);
+      if (mutationRafId) {
+        cancelAnimationFrame(mutationRafId);
+        mutationRafId = null;
+      }
+
       if (hasStructuralChange) {
-        hideAllOutlines();
-
-        if (mutationTimeout) clearTimeout(mutationTimeout);
-
-        // Show outlines after DOM settles
+        // Structural DOM changes: defer update to let DOM settle
+        // Don't hide outlines first — avoids blinking on re-selection
         mutationTimeout = setTimeout(() => {
           updateAllOutlines(isDraggingRef.current);
-        }, 150);
+        }, 50);
       } else {
         // Attribute-only changes (class/style) - defer to next frame so
         // Tailwind Browser CDN has time to generate CSS for new classes
         // and the browser can reflow before we measure dimensions
-        if (mutationRafId) cancelAnimationFrame(mutationRafId);
         mutationRafId = requestAnimationFrame(() => {
           mutationRafId = requestAnimationFrame(() => {
             updateAllOutlines(isDraggingRef.current);
@@ -266,6 +296,7 @@ export function SelectionOverlay({
 
   // Hide outlines during slider transitions
   const isSliderAnimating = useEditorStore((state) => state.isSliderAnimating);
+  const isCanvasContextMenuOpen = useEditorStore((state) => state.isCanvasContextMenuOpen);
 
   useEffect(() => {
     isSliderAnimatingRef.current = isSliderAnimating;
@@ -277,7 +308,10 @@ export function SelectionOverlay({
   }, [isSliderAnimating, updateAllOutlines, hideAllOutlines]);
 
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden z-40">
+    <div
+      className="absolute inset-0 pointer-events-none overflow-hidden z-40"
+      style={isCanvasContextMenuOpen ? { display: 'none' } : undefined}
+    >
       {/* Parent outline container (dashed) - visible during drag */}
       <div ref={parentContainerRef} style={{ display: 'none' }} />
 

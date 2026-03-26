@@ -8,10 +8,18 @@
 import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import RichTextEditor from './RichTextEditor';
 import RichTextEditorSheet from './RichTextEditorSheet';
-import { hasLinkOrComponent } from '@/lib/tiptap-utils';
-import type { CollectionField, Collection } from '@/types';
+import { CollectionFieldSelector, type FieldSourceType } from './CollectionFieldSelector';
+import { hasLinkOrComponent, getSoleCmsFieldBinding } from '@/lib/tiptap-utils';
+import { getVariableLabel } from '@/lib/cms-variables-utils';
+import { flattenFieldGroups, filterFieldGroupsByType, RICH_TEXT_ONLY_FIELD_TYPES } from '@/lib/collection-field-utils';
+import type { CollectionField, Collection, CollectionFieldType } from '@/types';
 import type { FieldGroup } from '@/lib/collection-field-utils';
 
 interface ExpandableRichTextEditorProps {
@@ -28,6 +36,12 @@ interface ExpandableRichTextEditorProps {
   allFields?: Record<string, CollectionField[]>;
   collections?: Collection[];
   disabled?: boolean;
+  /** Only show the button, hide the inline editor */
+  buttonOnly?: boolean;
+  /** Called when the user clears the CMS binding via the X button (falls back to resetting content if not provided) */
+  onClear?: () => void;
+  /** CMS field types allowed for variable binding (defaults to RICH_TEXT_ONLY_FIELD_TYPES) */
+  allowedFieldTypes?: CollectionFieldType[];
 }
 
 export default function ExpandableRichTextEditor({
@@ -41,25 +55,156 @@ export default function ExpandableRichTextEditor({
   allFields,
   collections,
   disabled = false,
+  buttonOnly = true,
+  onClear,
+  allowedFieldTypes = RICH_TEXT_ONLY_FIELD_TYPES,
 }: ExpandableRichTextEditorProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [cmsDropdownOpen, setCmsDropdownOpen] = useState(false);
   const isComplex = useMemo(() => hasLinkOrComponent(value), [value]);
+
+  const richTextBinding = useMemo(() => {
+    if (!buttonOnly) return null;
+    const binding = getSoleCmsFieldBinding(value);
+    return binding?.field_type === 'rich_text' ? binding : null;
+  }, [buttonOnly, value]);
+
+  const textFieldGroups = useMemo(
+    () => filterFieldGroupsByType(fieldGroups, allowedFieldTypes),
+    [fieldGroups, allowedFieldTypes],
+  );
+  const canShowVariables = textFieldGroups.length > 0;
+
+  const fields = useMemo(
+    () => flattenFieldGroups(fieldGroups),
+    [fieldGroups],
+  );
+
+  const handleFieldSelect = (fieldId: string, relationshipPath: string[], source?: FieldSourceType, layerId?: string) => {
+    const field = fields.find(f => f.id === fieldId);
+    const variableData = {
+      type: 'field' as const,
+      data: {
+        field_id: fieldId,
+        relationships: relationshipPath,
+        source,
+        field_type: field?.type || null,
+        collection_layer_id: layerId,
+      },
+    };
+    const label = getVariableLabel(variableData, fields, allFields);
+
+    const newContent = {
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'dynamicVariable',
+          attrs: { variable: variableData, label },
+        }],
+      }],
+    };
+    onChange(newContent);
+    setCmsDropdownOpen(false);
+  };
+
+  if (richTextBinding && !sheetOpen) {
+    return (
+      <>
+        <Button
+          asChild
+          variant="data"
+          className="justify-between! cursor-pointer"
+          onClick={() => setSheetOpen(true)}
+        >
+          <div>
+            <span className="flex items-center gap-1.5 truncate">
+              <Icon name="database" className="size-3 opacity-60 shrink-0" />
+              <span className="truncate">{richTextBinding.label || 'CMS Field'}</span>
+            </span>
+            <Button
+              className="size-4! p-0! shrink-0"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onClear) {
+                  onClear();
+                } else {
+                  onChange({ type: 'doc', content: [{ type: 'paragraph' }] });
+                }
+              }}
+            >
+              <Icon name="x" className="size-2" />
+            </Button>
+          </div>
+        </Button>
+        <RichTextEditorSheet
+          open={sheetOpen}
+          onOpenChange={(open) => {
+            setSheetOpen(open);
+            if (!open) onBlur?.(value);
+          }}
+          title={sheetTitle}
+          description={sheetDescription}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          fieldGroups={fieldGroups}
+          allFields={allFields}
+          collections={collections}
+        />
+      </>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        className="w-full gap-2.5"
-        onClick={() => setSheetOpen(true)}
-        disabled={disabled}
-      >
-        Richtext editor
-        <span><Icon name="expand" className="size-2.5" /></span>
-      </Button>
+      <div className="flex gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="flex-1 gap-2.5"
+          onClick={() => setSheetOpen(true)}
+        >
+          Expand
+          <span><Icon name="expand" className="size-2.5" /></span>
+        </Button>
 
-      {!isComplex && (
+        {buttonOnly && canShowVariables && (
+          <DropdownMenu
+            open={cmsDropdownOpen}
+            onOpenChange={setCmsDropdownOpen}
+          >
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                title="Insert CMS Variable"
+              >
+                <Icon name="database" className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            {fieldGroups && (
+              <DropdownMenuContent
+                className="w-56 py-1 px-1"
+                align="end"
+                sideOffset={4}
+              >
+                <CollectionFieldSelector
+                  fieldGroups={textFieldGroups}
+                  allFields={allFields || {}}
+                  collections={collections || []}
+                  onSelect={handleFieldSelect}
+                />
+              </DropdownMenuContent>
+            )}
+          </DropdownMenu>
+        )}
+      </div>
+
+      {!buttonOnly && !isComplex && (
         <RichTextEditor
           value={value}
           onChange={onChange}
@@ -71,6 +216,7 @@ export default function ExpandableRichTextEditor({
           withFormatting={true}
           showFormattingToolbar={false}
           disabled={disabled}
+          allowedFieldTypes={allowedFieldTypes}
         />
       )}
 

@@ -1,17 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { revalidatePath } from 'next/cache';
 import { noCache } from '@/lib/api-response';
+import { clearAllCache } from '@/lib/services/cacheService';
 
 /**
  * Vercel Cache Invalidation Endpoint
  * 
- * Handles full cache invalidation
+ * Handles full cache invalidation (data cache tags + layout path)
  */
 
 export async function POST(request: NextRequest) {
   try {
-    // Invalidate all pages
-    revalidatePath('/', 'layout');
+    await clearAllCache();
 
     return noCache({
       success: true,
