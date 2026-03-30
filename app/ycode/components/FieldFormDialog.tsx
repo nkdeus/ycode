@@ -180,7 +180,7 @@ export default function FieldFormDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4">
+        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); if (!isSubmitDisabled) handleSubmit(); }}>
           <div className="grid grid-cols-5 items-center gap-4">
             <Label htmlFor="field-name" className="text-right">
               Name
@@ -404,6 +404,7 @@ export default function FieldFormDialog({
 
           <div className="flex justify-end gap-2 mt-2">
             <Button
+              type="button"
               variant="secondary"
               size="sm"
               onClick={() => onOpenChange(false)}
@@ -411,14 +412,14 @@ export default function FieldFormDialog({
               Cancel
             </Button>
             <Button
+              type="submit"
               size="sm"
-              onClick={handleSubmit}
               disabled={isSubmitDisabled}
             >
               {mode === 'create' ? 'Create field' : 'Update field'}
             </Button>
           </div>
-        </div>
+        </form>
       </DialogContent>
     </Dialog>
   );
