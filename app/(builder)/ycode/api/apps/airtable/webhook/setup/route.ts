@@ -24,9 +24,20 @@ export async function POST(request: NextRequest) {
 
     const token = await requireAirtableToken();
 
-    // Build the public webhook URL
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL || '';
+    // Build the public webhook URL from env or request origin
+    const baseUrl =
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
+      request.nextUrl.origin;
     const notificationUrl = `${baseUrl}/api/airtable-webhook`;
+
+    if (!notificationUrl.startsWith('https://')) {
+      return noCache(
+        { error: 'Webhook requires a public HTTPS URL. Set NEXT_PUBLIC_SITE_URL in your environment.' },
+        400
+      );
+    }
 
     const webhook = await createWebhook(token, connection.baseId, connection.tableId, notificationUrl);
 
