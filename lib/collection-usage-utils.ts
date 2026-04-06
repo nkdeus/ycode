@@ -6,6 +6,7 @@
  */
 
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getConnections as getAirtableConnections } from '@/lib/apps/airtable/sync-service';
 import type { Layer, CollectionVariable, FieldVariable, DesignColorVariable } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -22,10 +23,16 @@ export interface ReferenceFieldUsageEntry extends UsageEntry {
   collectionName: string;
 }
 
+export interface AirtableConnectionUsageEntry extends UsageEntry {
+  baseName: string;
+  tableName: string;
+}
+
 export interface CollectionUsageResult {
   pages: UsageEntry[];
   components: UsageEntry[];
   referenceFields: ReferenceFieldUsageEntry[];
+  airtableConnections: AirtableConnectionUsageEntry[];
   total: number;
 }
 
@@ -298,11 +305,30 @@ export async function getCollectionUsage(collectionId: string): Promise<Collecti
     }
   }
 
+  // 5. Check Airtable connections targeting this collection
+  const airtableConnections: AirtableConnectionUsageEntry[] = [];
+  try {
+    const allConns = await getAirtableConnections();
+    for (const conn of allConns) {
+      if (conn.collectionId === collectionId) {
+        airtableConnections.push({
+          id: conn.id,
+          name: `[${conn.baseName}] ${conn.tableName}`,
+          baseName: conn.baseName,
+          tableName: conn.tableName,
+        });
+      }
+    }
+  } catch {
+    // Airtable not configured — skip
+  }
+
   return {
     pages,
     components,
     referenceFields,
-    total: pages.length + components.length + referenceFields.length,
+    airtableConnections,
+    total: pages.length + components.length + referenceFields.length + airtableConnections.length,
   };
 }
 

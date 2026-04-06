@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useSearchParams, usePathname } from 'next/navigation';
+import { useSearchParams, usePathname, useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +43,7 @@ import { APP_CATEGORIES } from '@/lib/apps/registry';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { MAILERLITE_SUBSCRIBER_FIELDS } from '@/lib/apps/mailerlite/types';
 import type { MailerLiteConnection, MailerLiteFieldMapping } from '@/lib/apps/mailerlite/types';
+import AirtableSettings from './airtable-settings';
 
 // =============================================================================
 // Types
@@ -217,8 +218,11 @@ export default function AppsPage() {
     return typeParam && validCategories.has(typeParam) ? typeParam : 'popular';
   });
 
+  const router = useRouter();
+
   // Sheet state
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
+  const [isSheetMounted, setIsSheetMounted] = useState(true);
 
   // MailerLite state
   const [apiKey, setApiKey] = useState('');
@@ -327,12 +331,15 @@ export default function AppsPage() {
   // =========================================================================
 
   const openAppSettings = (appId: string) => {
+    setIsSheetMounted(true);
     setSelectedAppId(appId);
     window.history.replaceState(null, '', buildUrl({ app: appId }));
 
     if (appId === 'mailerlite') {
       loadMailerLiteSettings();
       loadGroupsAndForms();
+    } else if (appId === 'airtable') {
+      // AirtableSettings handles its own loading
     } else if (TOKEN_APP_CONFIGS[appId]) {
       loadTokenApp(appId);
     }
@@ -341,14 +348,12 @@ export default function AppsPage() {
   const closeAppSettings = () => {
     setSelectedAppId(null);
     window.history.replaceState(null, '', buildUrl({ app: null }));
-    // Reset MailerLite state
     setApiKey('');
     setSavedApiKey('');
     setIsConnected(false);
     setConnections([]);
     setExpandedConnectionId(null);
     resetConnectionForm();
-    // Reset token app state
     setTokenApps({});
   };
 
@@ -987,309 +992,323 @@ export default function AppsPage() {
       </div>
 
       {/* App Settings Sheet */}
-      <Sheet
-        open={!!selectedAppId}
-        onOpenChange={(open: boolean) => {
-          if (!open) closeAppSettings();
-        }}
-      >
-        <SheetContent className="sm:max-w-lg overflow-y-auto">
-          {selectedAppId && TOKEN_APP_CONFIGS[selectedAppId] && (() => {
-            const config = TOKEN_APP_CONFIGS[selectedAppId];
-            const state = getTokenAppState(selectedAppId);
-            return (
+      {isSheetMounted && (
+        <Sheet
+          open={!!selectedAppId}
+          onOpenChange={(open: boolean) => {
+            if (!open) closeAppSettings();
+          }}
+        >
+          <SheetContent className="sm:max-w-lg overflow-y-auto">
+            {selectedAppId && TOKEN_APP_CONFIGS[selectedAppId] && (() => {
+              const config = TOKEN_APP_CONFIGS[selectedAppId];
+              const state = getTokenAppState(selectedAppId);
+              return (
+                <>
+                  <SheetHeader>
+                    <SheetTitle className="mr-auto">
+                      {config.label}
+                    </SheetTitle>
+                    {state.isConnected && state.savedToken && (
+                      <Button
+                        variant="secondary"
+                        size="xs"
+                        onClick={() => updateTokenAppState(selectedAppId, { showDisconnect: true })}
+                      >
+                        Disconnect
+                      </Button>
+                    )}
+                    <SheetDescription className="sr-only">
+                      {config.label} integration settings
+                    </SheetDescription>
+                  </SheetHeader>
+
+                  {state.isLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <Spinner />
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-8">
+                      <div className="space-y-4">
+                        <FieldDescription className="flex flex-col gap-2">
+                          <span>{config.description}</span>
+                          <span>
+                            Get your key from the{' '}
+                            <a
+                              href={config.dashboardUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-foreground underline"
+                            >
+                              {config.dashboardLabel}
+                            </a>.
+                          </span>
+                        </FieldDescription>
+
+                        <Field>
+                          <FieldLabel htmlFor={`${selectedAppId}-token`}>API Key</FieldLabel>
+                          <Input
+                            id={`${selectedAppId}-token`}
+                            type="password"
+                            placeholder={
+                              !state.savedToken && getSettingByKey(config.settingKey)
+                                ? 'The default API key is already provided by this server.'
+                                : config.placeholder
+                            }
+                            value={state.token}
+                            onChange={(e) => updateTokenAppState(selectedAppId, { token: e.target.value })}
+                            className="font-mono text-xs"
+                          />
+                          <div className="flex gap-2 mt-2">
+                            <Button
+                              size="sm"
+                              onClick={() => handleSaveTokenApp(selectedAppId)}
+                              disabled={!state.token.trim() || state.token === state.savedToken || state.isSaving}
+                            >
+                              {state.isSaving ? 'Saving...' : 'Save'}
+                            </Button>
+                          </div>
+                        </Field>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+
+            {selectedAppId === 'airtable' && (
+              <AirtableSettings
+                onDisconnect={() => updateAppStatus('airtable', false)}
+                onConnectionChange={(connected) => updateAppStatus('airtable', connected)}
+                onCloseAndNavigate={(path) => {
+                  setIsSheetMounted(false);
+                  closeAppSettings();
+                  router.push(path);
+                }}
+              />
+            )}
+
+            {selectedAppId === 'mailerlite' && (
               <>
                 <SheetHeader>
                   <SheetTitle className="mr-auto">
-                    {config.label}
+                    MailerLite
                   </SheetTitle>
-                  {state.isConnected && state.savedToken && (
+                  {isConnected && (
                     <Button
                       variant="secondary"
                       size="xs"
-                      onClick={() => updateTokenAppState(selectedAppId, { showDisconnect: true })}
+                      onClick={() => setShowDisconnectDialog(true)}
                     >
                       Disconnect
                     </Button>
                   )}
                   <SheetDescription className="sr-only">
-                    {config.label} integration settings
+                    MailerLite integration settings
                   </SheetDescription>
                 </SheetHeader>
 
-                {state.isLoading ? (
+                {isLoadingSettings ? (
                   <div className="flex items-center justify-center py-12">
                     <Spinner />
                   </div>
                 ) : (
                   <div className="mt-3 space-y-8">
+
+                    {/* API Key Section */}
                     <div className="space-y-4">
-                      <FieldDescription className="flex flex-col gap-2">
-                        <span>{config.description}</span>
-                        <span>
-                          Get your key from the{' '}
-                          <a
-                            href={config.dashboardUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-foreground underline"
-                          >
-                            {config.dashboardLabel}
-                          </a>.
-                        </span>
+                      <FieldDescription>
+                        Enter your MailerLite API key. Find it in{' '}
+                        <span className="text-foreground">MailerLite &rarr; Integrations &rarr; API</span>.
                       </FieldDescription>
 
                       <Field>
-                        <FieldLabel htmlFor={`${selectedAppId}-token`}>API Key</FieldLabel>
+                        <FieldLabel htmlFor="api-key">API Key</FieldLabel>
                         <Input
-                          id={`${selectedAppId}-token`}
+                          id="api-key"
                           type="password"
-                          placeholder={
-                            !state.savedToken && getSettingByKey(config.settingKey)
-                              ? 'The default API key is already provided by this server.'
-                              : config.placeholder
-                          }
-                          value={state.token}
-                          onChange={(e) => updateTokenAppState(selectedAppId, { token: e.target.value })}
+                          placeholder="Enter your MailerLite API key"
+                          value={apiKey}
+                          onChange={(e) => setApiKey(e.target.value)}
                           className="font-mono text-xs"
                         />
                         <div className="flex gap-2 mt-2">
                           <Button
+                            variant="secondary"
                             size="sm"
-                            onClick={() => handleSaveTokenApp(selectedAppId)}
-                            disabled={!state.token.trim() || state.token === state.savedToken || state.isSaving}
+                            onClick={handleTestApiKey}
+                            disabled={!apiKey.trim() || isTesting}
                           >
-                            {state.isSaving ? 'Saving...' : 'Save'}
+                            {isTesting ? 'Testing...' : 'Test connection'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={handleSaveApiKey}
+                            disabled={!apiKey.trim() || apiKey === savedApiKey || isSavingKey}
+                          >
+                            {isSavingKey ? 'Saving...' : 'Save'}
                           </Button>
                         </div>
                       </Field>
                     </div>
+
+                    {/* Connections Section */}
+                    {isConnected && (
+                      <div className="space-y-4 border-t pt-6">
+                        <div className="flex items-center justify-between">
+                          <FieldLegend>Connections</FieldLegend>
+                          <Button
+                            variant="secondary"
+                            size="xs"
+                            onClick={addNewConnection}
+                          >
+                            <Icon name="plus" className="size-3 mr-1" />
+                            Add
+                          </Button>
+                        </div>
+                        <FieldDescription>
+                          Map form submissions to MailerLite subscriber groups.
+                        </FieldDescription>
+
+                        {connections.length > 0 ? (
+                          <div className="space-y-2">
+                            {connections.map((connection) => (
+                              <Collapsible
+                                key={connection.id}
+                                open={expandedConnectionId === connection.id}
+                                onOpenChange={(open: boolean) => {
+                                  if (open) {
+                                    expandConnection(connection);
+                                  } else {
+                                    setExpandedConnectionId(null);
+                                    resetConnectionForm();
+                                  }
+                                }}
+                              >
+                                <div className="border rounded-lg overflow-hidden">
+                                  <CollapsibleTrigger asChild>
+                                    <div
+                                      role="button"
+                                      tabIndex={0}
+                                      className="w-full flex items-center gap-3 p-3 text-left hover:bg-secondary/30 transition-colors cursor-pointer"
+                                    >
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-1.5 mb-0.5">
+                                          <Label className="font-medium text-xs pointer-events-none">
+                                            {connection.formId}
+                                          </Label>
+                                          <span className="text-muted-foreground text-xs">&rarr;</span>
+                                          <span className="text-xs text-muted-foreground truncate">
+                                            {connection.groupName}
+                                          </span>
+                                        </div>
+                                        <div className="text-[11px] text-muted-foreground">
+                                          {connection.fieldMappings.length} field{connection.fieldMappings.length !== 1 ? 's' : ''} mapped
+                                        </div>
+                                      </div>
+
+                                      <Switch
+                                        checked={connection.enabled}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onCheckedChange={(enabled) =>
+                                          handleToggleConnection(connection.id, enabled)
+                                        }
+                                      />
+
+                                      <Icon
+                                        name="chevronRight"
+                                        className={`size-3 text-muted-foreground transition-transform ${expandedConnectionId === connection.id ? 'rotate-90' : ''}`}
+                                      />
+                                    </div>
+                                  </CollapsibleTrigger>
+
+                                  <CollapsibleContent>
+                                    <div className="border-t px-3 pb-3 pt-3 space-y-4">
+                                      {renderConnectionForm()}
+
+                                      <div className="flex items-center justify-between pt-2">
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="text-destructive hover:text-destructive"
+                                          onClick={() => setConnectionToDelete(connection)}
+                                        >
+                                          Delete connection
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          onClick={handleSaveConnection}
+                                          disabled={
+                                            !connectionFormId ||
+                                            !connectionGroupId ||
+                                            !connectionFieldMappings.some(
+                                              (m) => m.mailerliteField === 'email' && m.formField
+                                            ) ||
+                                            isSavingConnections
+                                          }
+                                        >
+                                          {isSavingConnections ? 'Saving...' : 'Save changes'}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </CollapsibleContent>
+                                </div>
+                              </Collapsible>
+                            ))}
+                          </div>
+                        ) : expandedConnectionId ? null : (
+                          <div className="py-6 text-center text-muted-foreground text-xs border border-dashed rounded-lg">
+                            No connections yet. Add one to start sending form data to MailerLite.
+                          </div>
+                        )}
+
+                        {/* New connection form (not yet saved) */}
+                        {expandedConnectionId?.startsWith('new-') && (
+                          <div className="border rounded-lg overflow-hidden">
+                            <div className="p-3 bg-secondary/20">
+                              <Label className="font-medium text-xs">New connection</Label>
+                            </div>
+                            <div className="border-t px-3 pb-3 pt-3 space-y-4">
+                              {renderConnectionForm()}
+
+                              <div className="flex items-center justify-between pt-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setExpandedConnectionId(null);
+                                    resetConnectionForm();
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  onClick={handleSaveConnection}
+                                  disabled={
+                                    !connectionFormId ||
+                                    !connectionGroupId ||
+                                    !connectionFieldMappings.some(
+                                      (m) => m.mailerliteField === 'email' && m.formField
+                                    ) ||
+                                    isSavingConnections
+                                  }
+                                >
+                                  {isSavingConnections ? 'Saving...' : 'Add connection'}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </>
-            );
-          })()}
-
-          {selectedAppId === 'mailerlite' && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="mr-auto">
-                  MailerLite
-                </SheetTitle>
-                {isConnected && (
-                  <Button
-                    variant="secondary"
-                    size="xs"
-                    onClick={() => setShowDisconnectDialog(true)}
-                  >
-                    Disconnect
-                  </Button>
-                )}
-                <SheetDescription className="sr-only">
-                  MailerLite integration settings
-                </SheetDescription>
-              </SheetHeader>
-
-              {isLoadingSettings ? (
-                <div className="flex items-center justify-center py-12">
-                  <Spinner />
-                </div>
-              ) : (
-                <div className="mt-3 space-y-8">
-
-                  {/* API Key Section */}
-                  <div className="space-y-4">
-                    <FieldDescription>
-                      Enter your MailerLite API key. Find it in{' '}
-                      <span className="text-foreground">MailerLite &rarr; Integrations &rarr; API</span>.
-                    </FieldDescription>
-
-                    <Field>
-                      <FieldLabel htmlFor="api-key">API Key</FieldLabel>
-                      <Input
-                        id="api-key"
-                        type="password"
-                        placeholder="Enter your MailerLite API key"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        className="font-mono text-xs"
-                      />
-                      <div className="flex gap-2 mt-2">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={handleTestApiKey}
-                          disabled={!apiKey.trim() || isTesting}
-                        >
-                          {isTesting ? 'Testing...' : 'Test connection'}
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={handleSaveApiKey}
-                          disabled={!apiKey.trim() || apiKey === savedApiKey || isSavingKey}
-                        >
-                          {isSavingKey ? 'Saving...' : 'Save'}
-                        </Button>
-                      </div>
-                    </Field>
-                  </div>
-
-                  {/* Connections Section */}
-                  {isConnected && (
-                    <div className="space-y-4 border-t pt-6">
-                      <div className="flex items-center justify-between">
-                        <FieldLegend>Connections</FieldLegend>
-                        <Button
-                          variant="secondary"
-                          size="xs"
-                          onClick={addNewConnection}
-                        >
-                          <Icon name="plus" className="size-3 mr-1" />
-                          Add
-                        </Button>
-                      </div>
-                      <FieldDescription>
-                        Map form submissions to MailerLite subscriber groups.
-                      </FieldDescription>
-
-                      {connections.length > 0 ? (
-                        <div className="space-y-2">
-                          {connections.map((connection) => (
-                            <Collapsible
-                              key={connection.id}
-                              open={expandedConnectionId === connection.id}
-                              onOpenChange={(open: boolean) => {
-                                if (open) {
-                                  expandConnection(connection);
-                                } else {
-                                  setExpandedConnectionId(null);
-                                  resetConnectionForm();
-                                }
-                              }}
-                            >
-                              <div className="border rounded-lg overflow-hidden">
-                                <CollapsibleTrigger asChild>
-                                  <div
-                                    role="button"
-                                    tabIndex={0}
-                                    className="w-full flex items-center gap-3 p-3 text-left hover:bg-secondary/30 transition-colors cursor-pointer"
-                                  >
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-1.5 mb-0.5">
-                                        <Label className="font-medium text-xs pointer-events-none">
-                                          {connection.formId}
-                                        </Label>
-                                        <span className="text-muted-foreground text-xs">&rarr;</span>
-                                        <span className="text-xs text-muted-foreground truncate">
-                                          {connection.groupName}
-                                        </span>
-                                      </div>
-                                      <div className="text-[11px] text-muted-foreground">
-                                        {connection.fieldMappings.length} field{connection.fieldMappings.length !== 1 ? 's' : ''} mapped
-                                      </div>
-                                    </div>
-
-                                    <Switch
-                                      checked={connection.enabled}
-                                      onClick={(e) => e.stopPropagation()}
-                                      onCheckedChange={(enabled) =>
-                                        handleToggleConnection(connection.id, enabled)
-                                      }
-                                    />
-
-                                    <Icon
-                                      name="chevronRight"
-                                      className={`size-3 text-muted-foreground transition-transform ${expandedConnectionId === connection.id ? 'rotate-90' : ''}`}
-                                    />
-                                  </div>
-                                </CollapsibleTrigger>
-
-                                <CollapsibleContent>
-                                  <div className="border-t px-3 pb-3 pt-3 space-y-4">
-                                    {renderConnectionForm()}
-
-                                    <div className="flex items-center justify-between pt-2">
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="text-destructive hover:text-destructive"
-                                        onClick={() => setConnectionToDelete(connection)}
-                                      >
-                                        Delete connection
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        onClick={handleSaveConnection}
-                                        disabled={
-                                          !connectionFormId ||
-                                          !connectionGroupId ||
-                                          !connectionFieldMappings.some(
-                                            (m) => m.mailerliteField === 'email' && m.formField
-                                          ) ||
-                                          isSavingConnections
-                                        }
-                                      >
-                                        {isSavingConnections ? 'Saving...' : 'Save changes'}
-                                      </Button>
-                                    </div>
-                                  </div>
-                                </CollapsibleContent>
-                              </div>
-                            </Collapsible>
-                          ))}
-                        </div>
-                      ) : expandedConnectionId ? null : (
-                        <div className="py-6 text-center text-muted-foreground text-xs border border-dashed rounded-lg">
-                          No connections yet. Add one to start sending form data to MailerLite.
-                        </div>
-                      )}
-
-                      {/* New connection form (not yet saved) */}
-                      {expandedConnectionId?.startsWith('new-') && (
-                        <div className="border rounded-lg overflow-hidden">
-                          <div className="p-3 bg-secondary/20">
-                            <Label className="font-medium text-xs">New connection</Label>
-                          </div>
-                          <div className="border-t px-3 pb-3 pt-3 space-y-4">
-                            {renderConnectionForm()}
-
-                            <div className="flex items-center justify-between pt-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  setExpandedConnectionId(null);
-                                  resetConnectionForm();
-                                }}
-                              >
-                                Cancel
-                              </Button>
-                              <Button
-                                size="sm"
-                                onClick={handleSaveConnection}
-                                disabled={
-                                  !connectionFormId ||
-                                  !connectionGroupId ||
-                                  !connectionFieldMappings.some(
-                                    (m) => m.mailerliteField === 'email' && m.formField
-                                  ) ||
-                                  isSavingConnections
-                                }
-                              >
-                                {isSavingConnections ? 'Saving...' : 'Add connection'}
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+            )}
+          </SheetContent>
+        </Sheet>
+      )}
 
       {/* Disconnect Confirmation Dialog */}
       <ConfirmDialog

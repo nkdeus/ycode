@@ -40,7 +40,7 @@ export const FIELD_TYPE_CATEGORIES: { id: FieldTypeCategory; label: string }[] =
 
 export const FIELD_TYPES = [
   { value: 'text', label: 'Text', icon: 'text', category: 'basic', hasDefault: true },
-  { value: 'rich_text', label: 'Rich Text', icon: 'rich-text', category: 'basic', hasDefault: true },
+  { value: 'rich_text', label: 'Rich text', icon: 'rich-text', category: 'basic', hasDefault: true },
   { value: 'number', label: 'Number', icon: 'hash', category: 'basic', hasDefault: true },
   { value: 'boolean', label: 'Boolean', icon: 'check', category: 'basic', hasDefault: true },
   { value: 'date', label: 'Date & Time', icon: 'calendar', category: 'basic', hasDefault: true },
@@ -54,7 +54,7 @@ export const FIELD_TYPES = [
   { value: 'video', label: 'Video', icon: 'video', category: 'asset', hasDefault: true },
   { value: 'document', label: 'Document', icon: 'file-text', category: 'asset', hasDefault: true },
   { value: 'reference', label: 'Reference', icon: 'database', category: 'relation', hasDefault: false },
-  { value: 'multi_reference', label: 'Multi-Reference', icon: 'database', category: 'relation', hasDefault: false },
+  { value: 'multi_reference', label: 'Multi-reference', icon: 'database', category: 'relation', hasDefault: false },
 ] as const satisfies readonly { value: string; label: string; icon: string; category: FieldTypeCategory; hasDefault: boolean }[];
 
 export type FieldType = (typeof FIELD_TYPES)[number]['value'];
@@ -96,6 +96,11 @@ export function getFieldIcon(
 ): IconProps['name'] {
   if (!fieldType) return defaultIcon;
   return FIELD_TYPES_BY_VALUE[fieldType as FieldType]?.icon ?? defaultIcon;
+}
+
+/** Get human-readable label for a field type (e.g. 'date_only' → 'Date') */
+export function getFieldTypeLabel(fieldType: CollectionFieldType | string): string {
+  return FIELD_TYPES_BY_VALUE[fieldType as FieldType]?.label ?? fieldType;
 }
 
 // =============================================================================

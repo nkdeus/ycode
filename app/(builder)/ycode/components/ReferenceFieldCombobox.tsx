@@ -79,28 +79,33 @@ export default function ReferenceFieldCombobox({
     [displayField]
   );
 
-  // Fetch items when popover opens
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+
+  // Load items eagerly on mount and refresh when dropdown opens
   useEffect(() => {
-    if (open && collectionId) {
-      const fetchItems = async () => {
-        setLoading(true);
-        setError(null);
-        try {
-          const response = await collectionsApi.getItems(collectionId, {
-            limit: 100, // Reasonable limit for combobox
-          });
-          if (response.error) {
-            throw new Error(response.error);
-          }
-          setItems(response.data?.items || []);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : 'Failed to load items');
-        } finally {
-          setLoading(false);
+    if (!collectionId) return;
+    if (hasLoadedOnce && !open) return;
+
+    const fetchItems = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await collectionsApi.getItems(collectionId, {
+          limit: 100,
+        });
+        if (response.error) {
+          throw new Error(response.error);
         }
-      };
-      fetchItems();
-    }
+        setItems(response.data?.items || []);
+        setHasLoadedOnce(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load items');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchItems();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, collectionId]);
 
   // Filter items based on search query
@@ -147,7 +152,14 @@ export default function ReferenceFieldCombobox({
     if (selectedIds.length === 0) return placeholder;
 
     if (isMulti) {
-      return `${selectedIds.length} item${selectedIds.length !== 1 ? 's' : ''} selected`;
+      const names = selectedIds
+        .map((id) => items.find((item) => item.id === id))
+        .filter((item): item is CollectionItemWithValues => !!item)
+        .map((item) => getDisplayName(item));
+
+      if (names.length > 0) return names.join(', ');
+      if (!hasLoadedOnce) return 'Loading data...';
+      return placeholder;
     }
 
     // For single reference, find the item name
@@ -156,8 +168,7 @@ export default function ReferenceFieldCombobox({
       return getDisplayName(selectedItem);
     }
 
-    // If items not loaded yet, show ID abbreviated
-    return 'Loading...';
+    if (!hasLoadedOnce) return 'Loading data...';
   };
 
   return (

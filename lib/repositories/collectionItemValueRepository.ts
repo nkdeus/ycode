@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import type { CollectionItemValue, CollectionFieldType } from '@/types';
 import { castValue, valueToString } from '../collection-utils';
 import { generateCollectionItemContentHash } from '../hash-utils';
@@ -127,6 +128,59 @@ export async function getValuesByItemIds(
   }
 
   return valuesByItem;
+}
+
+/**
+ * Load all values for the given field IDs with pagination.
+ * Returns Map<fieldId, Map<itemId, value>> — much lighter than loading all
+ * fields when only a few are needed (e.g. resolving airtable_id lookups).
+ */
+export async function getValueMapByFieldIds(
+  fieldIds: string[]
+): Promise<Map<string, Map<string, string>>> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  const result = new Map<string, Map<string, string>>();
+  if (fieldIds.length === 0) return result;
+
+  for (const fid of fieldIds) {
+    result.set(fid, new Map());
+  }
+
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await client
+      .from('collection_item_values')
+      .select('item_id, field_id, value')
+      .in('field_id', fieldIds)
+      .eq('is_published', false)
+      .is('deleted_at', null)
+      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+
+    if (error) {
+      throw new Error(`Failed to fetch field values: ${error.message}`);
+    }
+
+    if (data && data.length > 0) {
+      data.forEach((row: { item_id: string; field_id: string; value: string | null }) => {
+        if (row.value) {
+          result.get(row.field_id)!.set(row.item_id, row.value);
+        }
+      });
+      offset += data.length;
+      hasMore = data.length === SUPABASE_QUERY_LIMIT;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  return result;
 }
 
 /**

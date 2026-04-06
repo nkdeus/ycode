@@ -5,6 +5,7 @@ import {
   deleteAllAppSettings,
 } from '@/lib/repositories/appSettingsRepository';
 import { getAppById } from '@/lib/apps/registry';
+import { cleanupWebhooks as cleanupAirtableWebhooks } from '@/lib/apps/airtable/sync-service';
 import { noCache } from '@/lib/api-response';
 
 // Disable caching for this route
@@ -101,6 +102,10 @@ export async function DELETE(
     const app = getAppById(appId);
     if (!app) {
       return noCache({ error: 'App not found' }, 404);
+    }
+
+    if (appId === 'airtable') {
+      await cleanupAirtableWebhooks();
     }
 
     await deleteAllAppSettings(appId);
