@@ -534,8 +534,9 @@ export const collectionsApi = {
       sortOrder?: string;
       offset?: number;
       filters?: Array<{ fieldId: string; operator: string; value: string }>;
+      includeAssets?: boolean;
     }
-  ): Promise<ApiResponse<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number }>> {
+  ): Promise<ApiResponse<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number; referencedAssets?: Asset[] }>> {
     const params = new URLSearchParams();
     if (options?.page) params.append('page', options.page.toString());
     if (options?.limit) params.append('limit', options.limit.toString());
@@ -544,9 +545,10 @@ export const collectionsApi = {
     if (options?.sortOrder) params.append('sortOrder', options.sortOrder);
     if (options?.offset !== undefined) params.append('offset', options.offset.toString());
     if (options?.filters?.length) params.append('filters', JSON.stringify(options.filters));
+    if (options?.includeAssets) params.append('includeAssets', 'true');
     const queryString = params.toString();
     const url = `/ycode/api/collections/${collectionId}/items${queryString ? `?${queryString}` : ''}`;
-    return apiRequest<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number }>(url);
+    return apiRequest<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number; referencedAssets?: Asset[] }>(url);
   },
 
   async getItemById(collectionId: string, itemId: string): Promise<ApiResponse<CollectionItemWithValues>> {
@@ -591,16 +593,17 @@ export const collectionsApi = {
   async searchItems(
     collectionId: string,
     query: string,
-    options?: { page?: number; limit?: number; sortBy?: string; sortOrder?: string }
-  ): Promise<ApiResponse<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number }>> {
+    options?: { page?: number; limit?: number; sortBy?: string; sortOrder?: string; includeAssets?: boolean }
+  ): Promise<ApiResponse<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number; referencedAssets?: Asset[] }>> {
     const params = new URLSearchParams();
     params.append('search', query);
     if (options?.page) params.append('page', options.page.toString());
     if (options?.limit) params.append('limit', options.limit.toString());
     if (options?.sortBy) params.append('sortBy', options.sortBy);
     if (options?.sortOrder) params.append('sortOrder', options.sortOrder);
+    if (options?.includeAssets) params.append('includeAssets', 'true');
     const url = `/ycode/api/collections/${collectionId}/items?${params.toString()}`;
-    return apiRequest<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number }>(url);
+    return apiRequest<{ items: CollectionItemWithValues[]; total: number; page: number; limit: number; referencedAssets?: Asset[] }>(url);
   },
 
   // Published items
@@ -802,12 +805,82 @@ export const cacheApi = {
 
 // File Upload API
 
+// Files above this threshold use presigned URLs to bypass serverless body limits
+const DIRECT_UPLOAD_THRESHOLD = 4.5 * 1024 * 1024; // 4.5MB
+
 /**
- * Upload a file and create Asset record
+ * Upload a file via presigned URL (direct browser-to-storage).
+ * Used for large files that exceed serverless function body limits.
+ */
+async function uploadViaPresignedUrl(
+  file: File,
+  source: string,
+  category?: AssetCategory | null,
+  customName?: string,
+  assetFolderId?: string | null
+): Promise<Asset | null> {
+  // 1. Get presigned upload URL from server
+  const presignResponse = await fetch('/ycode/api/files/presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: file.name,
+      mimeType: file.type,
+      fileSize: file.size,
+      category,
+    }),
+  });
+
+  if (!presignResponse.ok) {
+    const errorData = await presignResponse.json();
+    throw new Error(errorData.error || 'Failed to get upload URL');
+  }
+
+  const { data: presignData } = await presignResponse.json();
+
+  // 2. Upload directly to Supabase Storage using the signed URL
+  const uploadResponse = await fetch(presignData.signedUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error('Failed to upload file to storage');
+  }
+
+  // 3. Register the asset record in the database
+  const registerResponse = await fetch('/ycode/api/files/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      storagePath: presignData.storagePath,
+      filename: file.name,
+      mimeType: file.type,
+      fileSize: file.size,
+      source,
+      customName,
+      assetFolderId,
+    }),
+  });
+
+  if (!registerResponse.ok) {
+    const errorData = await registerResponse.json();
+    throw new Error(errorData.error || 'Failed to register asset');
+  }
+
+  const { data } = await registerResponse.json();
+  return data;
+}
+
+/**
+ * Upload a file and create Asset record.
+ * Small files (<4.5MB) go through the server for WebP conversion.
+ * Large files use presigned URLs to upload directly to storage.
  *
  * @param file - File to upload
  * @param source - Source identifier (e.g., 'page-settings', 'components', 'library')
- * @param category - Optional file category for validation ('images', 'videos', 'audio', 'documents', or null for any)
+ * @param category - Optional file category for validation
  * @param customName - Optional custom name for the file
  */
 export async function uploadFileApi(
@@ -818,6 +891,11 @@ export async function uploadFileApi(
   assetFolderId?: string | null
 ): Promise<Asset | null> {
   try {
+    // Large files bypass the serverless function entirely
+    if (file.size > DIRECT_UPLOAD_THRESHOLD) {
+      return await uploadViaPresignedUrl(file, source, category, customName, assetFolderId);
+    }
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('source', source);

@@ -4,6 +4,7 @@
 
 import { BlockTemplate, SliderSettings, LightboxSettings, Layer } from '@/types';
 import { getTemplateRef, getLayerFromTemplate } from './blocks';
+import { DEFAULT_MAP_SETTINGS } from '@/lib/map-utils';
 
 /** Default slider settings applied when creating a new slider */
 export const DEFAULT_SLIDER_SETTINGS: SliderSettings = {
@@ -142,13 +143,22 @@ const CHEVRON_RIGHT_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 
 export const utilityTemplates: Record<string, BlockTemplate> = {
   map: {
-    icon: 'block',
+    icon: 'map',
     name: 'Map',
     template: {
       name: 'map',
-      classes: ['w-full', 'h-full'],
-      children: [],
-    },
+      classes: ['w-full', 'h-[400px]', 'overflow-hidden'],
+      design: {
+        sizing: {
+          isActive: true,
+          width: '100%',
+          height: '400px',
+        }
+      },
+      settings: {
+        map: { ...DEFAULT_MAP_SETTINGS }
+      }
+    }
   },
 
   lightbox: {

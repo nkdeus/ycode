@@ -106,6 +106,42 @@ export async function getFieldsByCollectionId(
 }
 
 /**
+ * Find fields by key across multiple collections in a single query.
+ * Returns Map<collectionId, field> for quick lookup.
+ */
+export async function getFieldsByKeyAcrossCollections(
+  key: string,
+  collectionIds: string[]
+): Promise<Map<string, CollectionField>> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  const result = new Map<string, CollectionField>();
+  if (collectionIds.length === 0) return result;
+
+  const { data, error } = await client
+    .from('collection_fields')
+    .select('*')
+    .eq('key', key)
+    .in('collection_id', collectionIds)
+    .eq('is_published', false)
+    .is('deleted_at', null);
+
+  if (error) {
+    throw new Error(`Failed to fetch fields by key: ${error.message}`);
+  }
+
+  data?.forEach((field: CollectionField) => {
+    result.set(field.collection_id, field);
+  });
+
+  return result;
+}
+
+/**
  * Get field by ID
  * @param id - Field UUID
  * @param isPublished - Get draft (false) or published (true) version. Defaults to false (draft).

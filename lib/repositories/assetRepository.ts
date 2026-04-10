@@ -93,9 +93,10 @@ export async function getAssetsPaginated(options: GetAssetsOptions = {}): Promis
     query = query.ilike('filename', `%${search.trim()}%`);
   }
 
-  // Apply pagination and ordering
+  // Apply pagination and ordering (id tiebreaker ensures stable order for identical timestamps)
   query = query
     .order('created_at', { ascending: false })
+    .order('id', { ascending: true })
     .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
@@ -140,7 +141,8 @@ export async function getAllAssets(folderId?: string | null): Promise<Asset[]> {
       .eq('is_published', false)
       .is('deleted_at', null)
       .range(offset, offset + PAGE_SIZE - 1)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: true });
 
     // Filter by folder if specified
     if (folderId !== undefined) {
@@ -269,6 +271,40 @@ export async function getAssetsByIds(ids: string[], isPublished: boolean = false
   });
 
   return assetMap;
+}
+
+/**
+ * Batch-find draft assets by filenames. Returns a map of filename → asset.
+ * Used for CSV import dedup to avoid N+1 queries.
+ */
+export async function findAssetsByFilenames(filenames: string[]): Promise<Record<string, Pick<Asset, 'id' | 'public_url'>>> {
+  if (filenames.length === 0) return {};
+
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const unique = [...new Set(filenames)];
+  const { data, error } = await client
+    .from('assets')
+    .select('id, filename, public_url')
+    .in('filename', unique)
+    .eq('is_published', false)
+    .is('deleted_at', null);
+
+  if (error || !data?.length) {
+    return {};
+  }
+
+  const map: Record<string, Pick<Asset, 'id' | 'public_url'>> = {};
+  for (const asset of data) {
+    if (!map[asset.filename]) {
+      map[asset.filename] = { id: asset.id, public_url: asset.public_url };
+    }
+  }
+  return map;
 }
 
 /**

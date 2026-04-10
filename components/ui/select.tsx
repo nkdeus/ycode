@@ -7,7 +7,6 @@ import { cva, type VariantProps } from 'class-variance-authority'
 
 import { cn } from '@/lib/utils'
 import Icon from '@/components/ui/icon';
-import { Button } from '@/components/ui/button';
 
 function Select({
   ...props
@@ -68,13 +67,12 @@ function SelectTrigger({
       {...props}
     >
       {children}
+
+      {/* "x" button to clear the value, uses <span> to prevent html button nesting */}
       {onClear ? (
-        <Button
+        <span
           role="button"
-          variant="ghost"
-          size="xs"
-          tabIndex={0}
-          className="ml-auto -mr-1 size-5"
+          className="ml-auto -mr-1 inline-flex size-5 items-center justify-center rounded-md hover:bg-accent cursor-pointer"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
@@ -89,10 +87,8 @@ function SelectTrigger({
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <div>
-            <Icon name="x" className="size-2.5" />
-          </div>
-        </Button>
+          <Icon name="x" className="size-2.5" />
+        </span>
       ) : (
         <SelectPrimitive.Icon asChild>
           <Icon name="chevronDown" className="size-2.5 opacity-50" />

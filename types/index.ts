@@ -68,6 +68,7 @@ export interface SizingDesign {
   minHeight?: string;
   maxWidth?: string;
   maxHeight?: string;
+  overflow?: string;
   aspectRatio?: string | null;
   objectFit?: string | null;
   gridColumnSpan?: string | null;
@@ -225,6 +226,31 @@ export interface LayerSettings {
   selectOptionsMode?: 'list' | 'sort_by' | 'sort_order'; // Builder source mode for select options
   sortByCollectionId?: string; // Collection to source sort-by field options from
   sortByFieldIds?: string[]; // Which field IDs are enabled as sort-by options
+  isPlaceholder?: boolean; // Marks an <option> child as a placeholder (disabled, hidden, selected)
+  map?: MapSettings; // Map-specific settings (only for map layers)
+}
+
+export type MapProvider = 'mapbox' | 'google';
+export type MapStyle = 'streets' | 'satellite' | 'light' | 'dark' | 'outdoors';
+export type GoogleMapStyle = 'roadmap' | 'satellite';
+
+export interface MapProviderSettings {
+  style: string;
+  interactive: boolean;
+  scrollZoom: boolean;
+  showNavControl: boolean;
+  showScaleBar: boolean;
+}
+
+export interface MapSettings {
+  provider: MapProvider;
+  latitude: number;
+  longitude: number;
+  zoom: number;
+  markerColor: string | null;
+  search?: string;
+  mapbox: MapProviderSettings;
+  google: MapProviderSettings;
 }
 
 // Layer Style Types
@@ -382,6 +408,8 @@ export interface Layer {
   _layerDataMap?: Record<string, Record<string, string>>;
   // SSR-only property for master component ID (for translation lookups)
   _masterComponentId?: string;
+  // SSR-only property for original layer ID before instance-specific ID transform (for translation lookups)
+  _originalLayerId?: string;
   // SSR-only property for pagination metadata (when pagination is enabled)
   _paginationMeta?: CollectionPaginationMeta;
   // SSR-only property for dynamic inline styles from CMS color field bindings
@@ -398,6 +426,8 @@ export interface Layer {
     limit?: number;
     paginationMode?: 'pages' | 'load_more';
     layerTemplate: Layer[];
+    collectionLayerClasses?: string[];
+    collectionLayerTag?: string;
   };
 }
 
@@ -746,8 +776,11 @@ export interface Redirect {
 
 export type SmtpProvider = 'google' | 'microsoft365' | 'mailersend' | 'postmark' | 'sendgrid' | 'mailgun' | 'amazonses' | 'other';
 
+export type EmailMode = 'ycode' | 'custom';
+
 export interface EmailSettings {
   enabled: boolean;
+  mode?: EmailMode;
   provider: SmtpProvider;
   smtpHost: string;
   smtpPort: string;
@@ -899,7 +932,7 @@ export interface ActivityNotification {
 }
 
 // Collection Types (EAV Architecture)
-export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'status';
+export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'date_only' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'status';
 export type CollectionSortDirection = 'asc' | 'desc' | 'manual';
 
 export interface CollectionSorting {

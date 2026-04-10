@@ -15,6 +15,7 @@ import { getSettingsByKeys } from '@/lib/repositories/settingsRepository';
 import { getAssetById } from '@/lib/repositories/assetRepository';
 import { getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
+import { getSiteBaseUrl } from '@/lib/url-utils';
 
 /**
  * Global page render settings fetched once per page render
@@ -168,16 +169,10 @@ export async function generatePageMetadata(
   if (!isPreview) {
     const seoSettings = options.globalSeoSettings || await fetchGlobalSeoSettings();
 
-    siteBaseUrl = (
-      seoSettings.globalCanonicalUrl
-      || primaryDomainUrl
-      || process.env.NEXT_PUBLIC_SITE_URL
-      || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null)
-      || null
-    );
-    if (siteBaseUrl) {
-      siteBaseUrl = siteBaseUrl.replace(/\/$/, '');
-    }
+    siteBaseUrl = getSiteBaseUrl({
+      globalCanonicalUrl: seoSettings.globalCanonicalUrl,
+      primaryDomainUrl,
+    });
 
     // Add Google Site Verification meta tag
     if (seoSettings.googleSiteVerification) {

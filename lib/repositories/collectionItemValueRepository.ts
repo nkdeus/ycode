@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { SUPABASE_QUERY_LIMIT } from '@/lib/supabase-constants';
 import type { CollectionItemValue, CollectionFieldType } from '@/types';
 import { castValue, valueToString } from '../collection-utils';
 import { generateCollectionItemContentHash } from '../hash-utils';
@@ -71,18 +72,6 @@ export async function insertValuesBulk(
   if (error) {
     throw new Error(`Failed to bulk insert values: ${error.message}`);
   }
-
-  // Compute and store content_hash per item
-  const valuesByItem = new Map<string, Array<{ field_id: string; value: string | null; is_published: boolean }>>();
-  for (const v of values) {
-    const key = v.item_id;
-    if (!valuesByItem.has(key)) valuesByItem.set(key, []);
-    valuesByItem.get(key)!.push({ field_id: v.field_id, value: v.value, is_published: v.is_published ?? false });
-  }
-  for (const [itemId, itemValues] of valuesByItem) {
-    const hash = generateCollectionItemContentHash(itemValues.map(v => ({ field_id: v.field_id, value: v.value })));
-    await updateContentHash(itemId, itemValues[0].is_published, hash);
-  }
 }
 
 export interface UpdateCollectionItemValueData {
@@ -108,8 +97,10 @@ export async function getValuesByItemIds(
     return {};
   }
 
-  // Batch into chunks to avoid exceeding PostgREST URL length limits
-  const CHUNK_SIZE = 200;
+  // Batch into chunks to avoid exceeding PostgREST URL length limits.
+  // Keep chunks small enough that total value rows stay under Supabase's
+  // default 1000-row response limit (50 items × ~20 fields = ~1000 rows).
+  const CHUNK_SIZE = 50;
   const valuesByItem: Record<string, Record<string, any>> = {};
 
   for (let i = 0; i < item_ids.length; i += CHUNK_SIZE) {
@@ -120,7 +111,8 @@ export async function getValuesByItemIds(
       .select('item_id, field_id, value, collection_fields!inner(type)')
       .in('item_id', chunk)
       .eq('is_published', is_published)
-      .is('deleted_at', null);
+      .is('deleted_at', null)
+      .limit(5000);
 
     if (error) {
       throw new Error(`Failed to fetch item values: ${error.message}`);
@@ -136,6 +128,59 @@ export async function getValuesByItemIds(
   }
 
   return valuesByItem;
+}
+
+/**
+ * Load all values for the given field IDs with pagination.
+ * Returns Map<fieldId, Map<itemId, value>> — much lighter than loading all
+ * fields when only a few are needed (e.g. resolving airtable_id lookups).
+ */
+export async function getValueMapByFieldIds(
+  fieldIds: string[]
+): Promise<Map<string, Map<string, string>>> {
+  const client = await getSupabaseAdmin();
+
+  if (!client) {
+    throw new Error('Supabase client not configured');
+  }
+
+  const result = new Map<string, Map<string, string>>();
+  if (fieldIds.length === 0) return result;
+
+  for (const fid of fieldIds) {
+    result.set(fid, new Map());
+  }
+
+  let offset = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data, error } = await client
+      .from('collection_item_values')
+      .select('item_id, field_id, value')
+      .in('field_id', fieldIds)
+      .eq('is_published', false)
+      .is('deleted_at', null)
+      .range(offset, offset + SUPABASE_QUERY_LIMIT - 1);
+
+    if (error) {
+      throw new Error(`Failed to fetch field values: ${error.message}`);
+    }
+
+    if (data && data.length > 0) {
+      data.forEach((row: { item_id: string; field_id: string; value: string | null }) => {
+        if (row.value) {
+          result.get(row.field_id)!.set(row.item_id, row.value);
+        }
+      });
+      offset += data.length;
+      hasMore = data.length === SUPABASE_QUERY_LIMIT;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  return result;
 }
 
 /**

@@ -330,14 +330,26 @@ export function useEditorUrl() {
 
   const navigateToCollectionItem = useCallback(
     (collectionId: string, itemRId: string) => {
-      router.push(`/ycode/collections/${collectionId}?edit=${itemRId}`);
+      const currentParams = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams();
+      params.set('edit', itemRId);
+      if (currentParams.has('page')) params.set('page', currentParams.get('page')!);
+      if (currentParams.has('limit')) params.set('limit', currentParams.get('limit')!);
+      if (currentParams.has('search')) params.set('search', currentParams.get('search')!);
+      router.push(`/ycode/collections/${collectionId}?${params.toString()}`);
     },
     [router]
   );
 
   const navigateToNewCollectionItem = useCallback(
     (collectionId: string) => {
-      router.push(`/ycode/collections/${collectionId}?new`);
+      const currentParams = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams();
+      params.set('new', '');
+      if (currentParams.has('page')) params.set('page', currentParams.get('page')!);
+      if (currentParams.has('limit')) params.set('limit', currentParams.get('limit')!);
+      if (currentParams.has('search')) params.set('search', currentParams.get('search')!);
+      router.push(`/ycode/collections/${collectionId}?${params.toString()}`);
     },
     [router]
   );

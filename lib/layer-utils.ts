@@ -12,6 +12,7 @@ import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 import { getCmsFieldBinding } from '@/lib/tiptap-utils';
 import { applyComponentOverrides } from '@/lib/resolve-components';
 import { resolveFieldFromSources } from '@/lib/cms-variables-utils';
+import { isDatePreset, resolveDateFilterValue } from '@/lib/collection-field-utils';
 import { parseMultiReferenceValue } from '@/lib/collection-utils';
 import { getInheritedValue } from '@/lib/tailwind-class-mapper';
 import { cloneDeep } from 'lodash';
@@ -293,7 +294,8 @@ export function canConvertToCollection(layer: Layer): boolean {
 const FILTER_INPUT_TYPES = ['input', 'select', 'textarea', 'checkbox', 'radio'];
 
 /**
- * Check if a layer is an input-type element that is a descendant of a 'filter' layer.
+ * Check if a layer is an input-type element (or a parent/sibling of one)
+ * that is a descendant of a 'filter' layer.
  * Used to validate element picker targets for collection filter linking.
  */
 export function isInputInsideFilter(layerId: string, layers: Layer[]): boolean {
@@ -303,8 +305,15 @@ export function isInputInsideFilter(layerId: string, layers: Layer[]): boolean {
   ): boolean => {
     for (const layer of searchLayers) {
       if (layer.id === layerId) {
-        if (!FILTER_INPUT_TYPES.includes(layer.name)) return false;
-        return ancestors.some(a => a.name === 'filter');
+        if (FILTER_INPUT_TYPES.includes(layer.name)) {
+          return ancestors.some(a => a.name === 'filter');
+        }
+        if (ancestors.some(a => a.name === 'filter')) {
+          if (layer.children?.some(c => FILTER_INPUT_TYPES.includes(c.name))) return true;
+          const parent = ancestors[ancestors.length - 1];
+          if (parent?.children?.some(c => FILTER_INPUT_TYPES.includes(c.name))) return true;
+        }
+        return false;
       }
       if (layer.children) {
         if (findWithAncestors(layer.children, [...ancestors, layer])) {
@@ -315,6 +324,37 @@ export function isInputInsideFilter(layerId: string, layers: Layer[]): boolean {
     return false;
   };
   return findWithAncestors(layers, []);
+}
+
+/**
+ * Resolve a clicked layer ID to the actual input layer ID for filter linking.
+ * If the clicked layer is already an input, returns its ID.
+ * If it's a wrapper/label, finds the associated input child or sibling.
+ */
+export function resolveFilterInputId(layerId: string, layers: Layer[]): string {
+  const layer = findLayerById(layers, layerId);
+  if (!layer) return layerId;
+  if (FILTER_INPUT_TYPES.includes(layer.name)) return layerId;
+
+  if (layer.children) {
+    const inputChild = layer.children.find(c => FILTER_INPUT_TYPES.includes(c.name));
+    if (inputChild) return inputChild.id;
+  }
+
+  const findParent = (searchLayers: Layer[]): Layer | null => {
+    for (const l of searchLayers) {
+      if (l.children?.some(c => c.id === layerId)) return l;
+      if (l.children) { const found = findParent(l.children); if (found) return found; }
+    }
+    return null;
+  };
+  const parent = findParent(layers);
+  if (parent?.children) {
+    const siblingInput = parent.children.find(c => FILTER_INPUT_TYPES.includes(c.name));
+    if (siblingInput) return siblingInput.id;
+  }
+
+  return layerId;
 }
 
 /**
@@ -1006,7 +1046,7 @@ export function canHaveChildren(layer: Layer, childLayerType?: string): boolean 
     'icon', 'image', 'audio', 'video', 'iframe',
     'heading', 'text', 'richText', 'span', 'label', 'hr',
     'input', 'textarea', 'select', 'checkbox', 'radio',
-    'htmlEmbed',
+    'htmlEmbed', 'map',
   ];
 
   // Sections cannot contain other sections
@@ -1500,8 +1540,54 @@ export function getLayerName(
 /**
  * Get the HTML tag name for a layer
  */
+const LAYER_NAME_TO_HTML_TAG: Record<string, string> = {
+  // Content
+  text: 'p',
+  heading: 'h2',
+  richText: 'div',
+  span: 'span',
+  label: 'label',
+
+  // Media
+  image: 'img',
+  icon: 'span',
+  video: 'video',
+  audio: 'audio',
+
+  // Structure (valid HTML tags — pass through via fallback)
+  // div, section, form, button, hr, iframe, input, textarea, select
+
+  // Embedded / special
+  htmlEmbed: 'div',
+  map: 'div',
+
+  // Slider family
+  slider: 'div',
+  slides: 'div',
+  slide: 'div',
+  slideNavigationWrapper: 'div',
+  slideButtonPrev: 'div',
+  slideButtonNext: 'div',
+  slidePaginationWrapper: 'div',
+  slideBullets: 'div',
+  slideBullet: 'div',
+  slideFraction: 'div',
+
+  // Lightbox
+  lightbox: 'div',
+
+  // Locale selector
+  localeSelector: 'div',
+
+  // Filter
+  filter: 'div',
+
+  // Checkbox / radio (the input itself is valid HTML; these are Ycode wrapper names)
+  checkbox: 'input',
+  radio: 'input',
+};
+
 export function getLayerHtmlTag(layer: Layer): string {
-  // Body layer should render as div (actual <body> is managed by Next.js)
   if (layer.id === 'body' || layer.name === 'body') {
     return 'div';
   }
@@ -1510,22 +1596,7 @@ export function getLayerHtmlTag(layer: Layer): string {
     return layer.settings.tag;
   }
 
-  // Heading layers default to h2 when no tag is set
-  if (layer.name === 'heading') {
-    return 'h2';
-  }
-
-  // Rich text renders as div (contains block-level content)
-  if (layer.name === 'richText') {
-    return 'div';
-  }
-
-  // Slider sub-layers always render as divs
-  if (isSliderLayerName(layer.name)) {
-    return 'div';
-  }
-
-  return layer.name || 'div';
+  return LAYER_NAME_TO_HTML_TAG[layer.name] || layer.name || 'div';
 }
 
 /**
@@ -1832,13 +1903,24 @@ function evaluateCondition(
     // Use source-aware resolution (collection layer data first, then page data)
     const rawValue = resolveFieldFromSources(fieldId, undefined, collectionLayerData, pageCollectionData);
     const value = String(rawValue ?? '');
-    const compareValue = String(condition.value ?? '');
+    let compareValue = String(condition.value ?? '');
+    let compareValue2 = condition.value2;
+    let effectiveOperator = condition.operator;
     const fieldType = condition.fieldType || 'text';
+
+    if (fieldType === 'date' && isDatePreset(compareValue)) {
+      const resolved = resolveDateFilterValue(effectiveOperator, compareValue, compareValue2);
+      if (resolved) {
+        effectiveOperator = resolved.operator as typeof effectiveOperator;
+        compareValue = resolved.value;
+        compareValue2 = resolved.value2;
+      }
+    }
 
     // Check if value is present (non-empty)
     const isPresent = rawValue !== undefined && rawValue !== null && rawValue !== '';
 
-    switch (condition.operator) {
+    switch (effectiveOperator) {
       // Text operators
       case 'is':
         if (fieldType === 'boolean') {
@@ -1896,7 +1978,7 @@ function evaluateCondition(
       case 'is_between': {
         const dateValue = new Date(value);
         const startDate = new Date(compareValue);
-        const endDate = new Date(condition.value2 ?? '');
+        const endDate = new Date(compareValue2 ?? '');
         return dateValue >= startDate && dateValue <= endDate;
       }
 
@@ -2172,6 +2254,7 @@ function resolveComponentsInLayers(
   components: Component[],
   parentComponentVariables?: ComponentVariable[],
   parentOverrides?: Layer['componentOverrides'],
+  _visitedComponentIds?: Set<string>,
 ): Layer[] {
   // First, resolve variableLinks at this level using applyComponentOverrides
   // This handles nested component instances whose variableLinks point to parentComponentVariables
@@ -2179,12 +2262,23 @@ function resolveComponentsInLayers(
     ? applyComponentOverrides(layers, parentOverrides, parentComponentVariables)
     : layers;
 
+  const visited = _visitedComponentIds ?? new Set<string>();
+
   return effectiveLayers.map(layer => {
     // If this layer is a component instance, populate its children from the component
     if (layer.componentId) {
+      // Circular reference guard
+      if (visited.has(layer.componentId)) {
+        console.warn('[resolveComponentsInLayers] Circular component reference detected, skipping:', layer.componentId);
+        return { ...layer, children: [] };
+      }
+
       const component = components.find(c => c.id === layer.componentId);
 
       if (component && component.layers && component.layers.length > 0) {
+        const innerVisited = new Set(visited);
+        innerVisited.add(layer.componentId);
+
         // The component's first layer is the actual content (Section, etc.)
         const componentContent = component.layers[0];
 
@@ -2197,7 +2291,7 @@ function resolveComponentsInLayers(
         // Recursively resolve any nested components within the transformed children
         // Pass current component's variables and this instance's overrides
         const resolvedChildren = resolveComponentsInLayers(
-          transformedChildren, components, component.variables, layer.componentOverrides,
+          transformedChildren, components, component.variables, layer.componentOverrides, innerVisited,
         );
 
         // Build ID map for remapping root layer interactions
@@ -2251,7 +2345,7 @@ function resolveComponentsInLayers(
     if (layer.children && layer.children.length > 0) {
       return {
         ...layer,
-        children: resolveComponentsInLayers(layer.children, components, parentComponentVariables, parentOverrides),
+        children: resolveComponentsInLayers(layer.children, components, parentComponentVariables, parentOverrides, visited),
       };
     }
 

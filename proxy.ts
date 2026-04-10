@@ -110,6 +110,14 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
+  // MCP endpoint uses its own token-based authentication — skip session auth.
+  // Cloud overlay proxies MUST also exempt this path to avoid login redirects.
+  if (pathname.startsWith('/ycode/mcp/')) {
+    const response = NextResponse.next();
+    response.headers.set('x-pathname', pathname);
+    return response;
+  }
+
   // Protect API and preview routes with auth
   if (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview')) {
     const authResponse = await verifyApiAuth(request);

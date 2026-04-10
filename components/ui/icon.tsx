@@ -9,7 +9,7 @@ export interface IconProps extends React.SVGProps<SVGSVGElement> {
     'x' | 'layers' | 'database' | 'plus' | 'chevronCombo' | 'chevronDown' | 'chevronUp' | 'check' | 'textAlignLeft' | 'textAlignRight' | 'textAlignCenter' | 'textAlignJustify' | 'individualBorders'
     | 'borders' | 'borderTopLeft' | 'letterSpacing' | 'lineHeight' | 'columns' | 'rows' | 'grid' | 'alignStart' | 'alignCenter' | 'alignEnd' | 'alignStretch' | 'verticalGap'
     | 'horizontalGap' | 'link' | 'paddingSide' | 'block' | 'section' | 'container' | 'separator' | 'image' | 'icon' | 'video' | 'text' | 'layout' | 'heading' | 'type'
-    | 'file-text' | 'edit' | 'box' | 'chevronRight' | 'minSize' | 'maxSize' | 'undo' | 'redo' | 'page' | 'dynamicPage' | 'homepage' | 'folder' | 'dotsHorizontal' | 'refresh'
+    | 'file-text' | 'edit' | 'box' | 'chevronRight' | 'chevronLeft' | 'minSize' | 'maxSize' | 'undo' | 'redo' | 'page' | 'dynamicPage' | 'homepage' | 'folder' | 'dotsHorizontal' | 'refresh'
     | 'more' | 'copy' | 'component' | 'arrowLeft' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'subscript' | 'superscript' | 'quote' | 'listOrdered' | 'listUnordered'
     | 'code' | 'pencil' | 'eye' | 'eye-off' | 'trash' | 'grip-vertical' | 'upload' | 'search' | 'rich-text' | 'audio' | 'cursor-default' | 'form' | 'input' | 'textarea'
     | 'select' | 'checkbox' | 'radio' | 'zap' | 'zap-outline' | 'loopAlternate' | 'loopRepeat' | 'globe' | 'ease-linear' | 'ease-in' | 'ease-in-out' | 'ease-out' | 'ease-back-in'
@@ -17,6 +17,7 @@ export interface IconProps extends React.SVGProps<SVGSVGElement> {
     | 'paintbrush' | 'swatch' | 'cube' | 'triangle-down' | 'triangle-right' | 'plus-circle' | 'plus-circle-solid' | 'detach' | 'email' | 'phone' | 'paperclip' | 'unlink' | 'map'
     | 'paragraph' | 'droplet' | 'expand' | 'collapse' | 'filter' | 'crosshair' | 'lightbox' | 'slider' | 'slide' | 'slides' | 'slide-button-prev' | 'slide-button-next'
     | 'slide-bullets' | 'slide-bullet' | 'slide-navigation' | 'slide-fraction' | 'loop-alternate' | 'loop-repeat' | 'listItem' | 'external-link'
+    | 'settings' | 'center-block'
   );
 }
 
@@ -38,6 +39,11 @@ const ICONS: Record<IconProps['name'], React.ReactNode> = {
   layers: (
     <>
       <path d="M11.1025725,7.91284093 L11.7212706,8.235504 C11.893462,8.32524748 11.9992501,8.48939425 11.9992501,8.66683254 C11.9992501,8.84427082 11.893462,9.0084176 11.7212706,9.09816107 L6.28422618,11.9314629 C6.10868449,12.0228457 5.89131551,12.0228457 5.71577382,11.9314629 L0.278729391,9.09816107 C0.106538049,9.0084176 0.000749937162,8.84427082 0.000749937162,8.66683254 C0.000749937162,8.48939425 0.106538049,8.32524748 0.278729391,8.235504 L0.89742755,7.91350759 L5.14657151,10.127483 C5.67357437,10.4021523 6.32642563,10.4021523 6.85342849,10.127483 L11.1025725,7.91284093 Z M11.1025725,5.24620394 L11.7212706,5.56886701 C11.893462,5.65861049 11.9992501,5.82275726 11.9992501,6.00019555 C11.9992501,6.17763383 11.893462,6.3417806 11.7212706,6.43152408 L6.28422618,9.26482588 C6.10868449,9.35620872 5.89131551,9.35620872 5.71577382,9.26482588 L0.278729391,6.43152408 C0.106538049,6.3417806 0.000749937162,6.17763383 0.000749937162,6.00019555 C0.000749937162,5.82275726 0.106538049,5.65861049 0.278729391,5.56886701 L0.89742755,5.2468706 L5.14657151,7.46084596 C5.67357437,7.73551529 6.32642563,7.73551529 6.85342849,7.46084596 L11.1025725,5.24620394 Z M5.71502388,0.0689282154 C5.89094307,-0.0229760718 6.10905693,-0.0229760718 6.28497612,0.0689282154 L11.7220205,2.90223002 C11.8942119,2.99197349 12,3.15612027 12,3.33355855 C12,3.51099684 11.8942119,3.67514361 11.7220205,3.76488709 L6.28497612,6.59818889 C6.10905693,6.69009318 5.89094307,6.69009318 5.71502388,6.59818889 L0.277979454,3.76488709 C0.105788111,3.67514361 0,3.51099684 0,3.33355855 C0,3.15612027 0.105788111,2.99197349 0.277979454,2.90223002 Z" />
+    </>
+  ),
+  'center-block': (
+    <>
+      <path d="M1 9v2h10V9h1v2.25a.75.75 0 0 1-.75.75H.75a.75.75 0 0 1-.75-.75V9h1Zm7.5-7a.5.5 0 0 1 .5.5v7a.5.5 0 0 1-.5.5h-5a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5h5ZM8 3H4v6h4V3ZM.784 4.089l.07.057 1.5 1.5a.5.5 0 0 1 .057.638l-.057.07-1.5 1.5a.5.5 0 0 1-.765-.638l.057-.07L1.293 6 .146 4.854a.5.5 0 0 1-.057-.638l.057-.07a.5.5 0 0 1 .638-.057Zm11.07.057a.5.5 0 0 1 .057.638l-.057.07L10.707 6l1.147 1.146a.5.5 0 0 1 .057.638l-.057.07a.5.5 0 0 1-.638.057l-.07-.057-1.5-1.5a.5.5 0 0 1-.057-.638l.057-.07 1.5-1.5a.5.5 0 0 1 .708 0ZM11.25 0a.75.75 0 0 1 .75.75V3h-1V1H1v2H0V.75A.75.75 0 0 1 .75 0h10.5Z" />
     </>
   ),
   eyedrop: (
@@ -668,10 +674,16 @@ const ICONS: Record<IconProps['name'], React.ReactNode> = {
       />
     </>
   ),
+  chevronLeft: (
+      <>
+          <path
+            d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z"
+          />
+      </>
+  ),
   chevronRight: (
       <>
           <path
-            xmlns="http://www.w3.org/2000/svg"
             d="M7.7479998,1.79289322 L8.45510658,2.5 L4.955,5.99989322 L8.45510658,9.5 L7.7479998,10.2071068 L4.247,6.70689322 L3.54,6.00089302 L4.159,5.38089322 L4.24720042,5.29209384 L4.248,5.29289322 L7.7479998,1.79289322 Z"
             transform="translate(5.9976, 6) scale(-1, 1) translate(-5.9976, -6)"
           />
@@ -962,6 +974,9 @@ const ICONS: Record<IconProps['name'], React.ReactNode> = {
   ),
   'external-link': (
     <path d="M5,2 L5,3 L2.5,3 C1.72030388,3 1.07955132,3.59488808 1.00686658,4.35553999 L1,4.5 L1,9.5 C1,10.2796961 1.59488808,10.9204487 2.35553999,10.9931334 L2.5,11 L7.5,11 C8.27969612,11 8.92044868,10.4051119 8.99313342,9.64446001 L9,9.5 L9,7 L10,7 L10,9.5 C10,10.8254834 8.96846406,11.9100387 7.66437569,11.9946823 L7.5,12 L2.5,12 C1.1745166,12 0.089961328,10.9684641 0.00531767968,9.66437569 L0,9.5 L0,4.5 C0,3.1745166 1.03153594,2.08996133 2.33562431,2.00531768 L2.5,2 L5,2 Z M12,0 L12,5 L11,5 L11,1.753 L5.7,7.00090117 L5,6.29379439 L10.341,1 L7,1 L7,0 L12,0 Z" />
+  ),
+  settings: (
+    <path d="M3.0854 9C3.2913 8.4174 3.8469 8 4.5 8C5.1531 8 5.7087 8.4174 5.9147 9H11V10H5.9147C5.7087 10.5826 5.1531 11 4.5 11C3.8469 11 3.2913 10.5826 3.0854 10H1V9H3.0854ZM6.0854 5.5C6.2913 4.9174 6.8469 4.5 7.5 4.5C8.1531 4.5 8.7087 4.9174 8.9147 5.5H11V6.5H8.9147C8.7087 7.0826 8.1531 7.5 7.5 7.5C6.8469 7.5 6.2913 7.0826 6.0854 6.5H1V5.5H6.0854ZM3.0854 2C3.2913 1.4174 3.8469 1 4.5 1C5.1531 1 5.7087 1.4174 5.9147 2H11V3H5.9147C5.7087 3.5826 5.1531 4 4.5 4C3.8469 4 3.2913 3.5826 3.0854 3H1V2H3.0854Z" />
   ),
 };
 

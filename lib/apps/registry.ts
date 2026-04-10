@@ -11,24 +11,29 @@
 
 import type { StaticImageData } from 'next/image';
 
+import airtableLogo from './airtable/logo.svg';
 import mailerliteLogo from './mailerlite/logo.svg';
 import mailchimpLogo from './mailchimp/logo.svg';
 import zapierLogo from './zapier/logo.svg';
 import makeLogo from './make/logo.svg';
 import evaCssLogo from './eva-css/logo.svg';
+import mapboxLogo from './mapbox/logo.png';
+import googleMapsEmbedLogo from './google-maps-embed/logo.png';
 
 // =============================================================================
 // Types
 // =============================================================================
 
-export type AppCategory = 'popular' | 'marketing' | 'automation' | 'analytics' | 'email' | 'other';
+export type AppCategory = 'popular' | 'cms-data' | 'marketing' | 'automation' | 'analytics' | 'email' | 'maps' | 'other';
 
 export const APP_CATEGORIES: { value: AppCategory; label: string }[] = [
   { value: 'popular', label: 'Popular' },
+  { value: 'cms-data', label: 'CMS Data' },
   { value: 'marketing', label: 'Marketing' },
   { value: 'automation', label: 'Automation' },
   { value: 'analytics', label: 'Analytics' },
   { value: 'email', label: 'Email' },
+  { value: 'maps', label: 'Maps' },
   { value: 'other', label: 'Other' },
 ];
 
@@ -53,11 +58,19 @@ export interface AppDefinition {
 
 export const apps: AppDefinition[] = [
   {
+    id: 'airtable',
+    name: 'Airtable',
+    description: 'One-way sync from Airtable tables to your Ycode collections with real-time webhook support.',
+    logo: airtableLogo,
+    categories: ['popular', 'cms-data'],
+    implemented: true,
+  },
+  {
     id: 'mailerlite',
     name: 'MailerLite',
     description: 'Send form submissions to MailerLite subscriber groups with field mapping.',
     logo: mailerliteLogo,
-    categories: ['popular', 'marketing'],
+    categories: ['popular', 'email'],
     implemented: true,
   },
   {
@@ -65,7 +78,7 @@ export const apps: AppDefinition[] = [
     name: 'Mailchimp',
     description: 'Sync form submissions with Mailchimp audiences and manage email campaigns.',
     logo: mailchimpLogo,
-    categories: ['popular', 'marketing'],
+    categories: ['popular', 'email'],
     implemented: false,
   },
   {
@@ -90,6 +103,22 @@ export const apps: AppDefinition[] = [
     description: 'Fluid responsive design — converts static pixel values to fluid clamp() values.',
     logo: evaCssLogo,
     categories: ['popular'],
+    implemented: true,
+  },
+  {
+    id: 'mapbox',
+    name: 'Mapbox',
+    description: 'Add interactive maps to your pages with custom styles and markers using the Mapbox API.',
+    logo: mapboxLogo,
+    categories: ['popular', 'maps'],
+    implemented: true,
+  },
+  {
+    id: 'google-maps-embed',
+    name: 'Google Map',
+    description: 'Add interactive maps to your pages with custom styles using the Google Maps Embed API.',
+    logo: googleMapsEmbedLogo,
+    categories: ['popular', 'maps'],
     implemented: true,
   },
 ];

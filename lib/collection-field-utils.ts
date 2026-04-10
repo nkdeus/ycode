@@ -23,6 +23,11 @@ import { findAllParentCollectionLayers, getCollectionVariable } from '@/lib/laye
 // Field Types Configuration
 // =============================================================================
 
+/** Check if a field type stores date/datetime values (date or date_only) */
+export function isDateFieldType(type: CollectionFieldType | string | null | undefined): boolean {
+  return type === 'date' || type === 'date_only';
+}
+
 /** Field type category for grouping in the type selector */
 export type FieldTypeCategory = 'basic' | 'contact' | 'asset' | 'relation';
 
@@ -35,10 +40,11 @@ export const FIELD_TYPE_CATEGORIES: { id: FieldTypeCategory; label: string }[] =
 
 export const FIELD_TYPES = [
   { value: 'text', label: 'Text', icon: 'text', category: 'basic', hasDefault: true },
-  { value: 'rich_text', label: 'Rich Text', icon: 'rich-text', category: 'basic', hasDefault: true },
+  { value: 'rich_text', label: 'Rich text', icon: 'rich-text', category: 'basic', hasDefault: true },
   { value: 'number', label: 'Number', icon: 'hash', category: 'basic', hasDefault: true },
   { value: 'boolean', label: 'Boolean', icon: 'check', category: 'basic', hasDefault: true },
-  { value: 'date', label: 'Date', icon: 'calendar', category: 'basic', hasDefault: true },
+  { value: 'date', label: 'Date & Time', icon: 'calendar', category: 'basic', hasDefault: true },
+  { value: 'date_only', label: 'Date', icon: 'calendar', category: 'basic', hasDefault: true },
   { value: 'color', label: 'Color', icon: 'droplet', category: 'basic', hasDefault: true },
   { value: 'email', label: 'Email', icon: 'email', category: 'contact', hasDefault: true },
   { value: 'phone', label: 'Phone', icon: 'phone', category: 'contact', hasDefault: true },
@@ -48,7 +54,7 @@ export const FIELD_TYPES = [
   { value: 'video', label: 'Video', icon: 'video', category: 'asset', hasDefault: true },
   { value: 'document', label: 'Document', icon: 'file-text', category: 'asset', hasDefault: true },
   { value: 'reference', label: 'Reference', icon: 'database', category: 'relation', hasDefault: false },
-  { value: 'multi_reference', label: 'Multi-Reference', icon: 'database', category: 'relation', hasDefault: false },
+  { value: 'multi_reference', label: 'Multi-reference', icon: 'database', category: 'relation', hasDefault: false },
 ] as const satisfies readonly { value: string; label: string; icon: string; category: FieldTypeCategory; hasDefault: boolean }[];
 
 export type FieldType = (typeof FIELD_TYPES)[number]['value'];
@@ -90,6 +96,11 @@ export function getFieldIcon(
 ): IconProps['name'] {
   if (!fieldType) return defaultIcon;
   return FIELD_TYPES_BY_VALUE[fieldType as FieldType]?.icon ?? defaultIcon;
+}
+
+/** Get human-readable label for a field type (e.g. 'date_only' → 'Date') */
+export function getFieldTypeLabel(fieldType: CollectionFieldType | string): string {
+  return FIELD_TYPES_BY_VALUE[fieldType as FieldType]?.label ?? fieldType;
 }
 
 // =============================================================================
@@ -169,6 +180,7 @@ export function getOperatorsForFieldType(
     case 'number':
       return NUMBER_OPERATORS;
     case 'date':
+    case 'date_only':
       return DATE_OPERATORS;
     case 'boolean':
       return BOOLEAN_OPERATORS;
@@ -213,6 +225,96 @@ export function operatorRequiresItemSelection(operator: VisibilityOperator): boo
 /** Check if operator requires a second value (for date ranges) */
 export function operatorRequiresSecondValue(operator: VisibilityOperator): boolean {
   return operator === 'is_between';
+}
+
+// =============================================================================
+// Date Filter Presets
+// =============================================================================
+
+export interface DatePresetOption {
+  value: string;
+  label: string;
+}
+
+export const DATE_PRESET_OPTIONS: DatePresetOption[] = [
+  { value: '$today', label: 'Today' },
+  { value: '$this_week', label: 'This week' },
+  { value: '$this_month', label: 'This month' },
+  { value: '$this_year', label: 'This year' },
+  { value: '$past_week', label: 'In the past week' },
+  { value: '$past_month', label: 'In the past month' },
+  { value: '$past_year', label: 'In the past year' },
+];
+
+export function isDatePreset(value: string | undefined): boolean {
+  return !!value && value.startsWith('$');
+}
+
+/**
+ * Resolve a date preset string to a concrete YYYY-MM-DD date (or date pair for
+ * range presets). Returns `null` for non-preset values.
+ */
+export function resolveDatePreset(preset: string): { start: string; end: string } | null {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = now.getMonth();
+  const dd = now.getDate();
+
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+  switch (preset) {
+    case '$today':
+      return { start: fmt(new Date(yyyy, mm, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+    case '$this_week': {
+      const day = now.getDay();
+      const monday = new Date(yyyy, mm, dd - ((day + 6) % 7));
+      const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+      return { start: fmt(monday), end: fmt(sunday) };
+    }
+    case '$this_month':
+      return { start: fmt(new Date(yyyy, mm, 1)), end: fmt(new Date(yyyy, mm + 1, 0)) };
+    case '$this_year':
+      return { start: fmt(new Date(yyyy, 0, 1)), end: fmt(new Date(yyyy, 11, 31)) };
+    case '$past_week':
+      return { start: fmt(new Date(yyyy, mm, dd - 7)), end: fmt(new Date(yyyy, mm, dd)) };
+    case '$past_month':
+      return { start: fmt(new Date(yyyy, mm - 1, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+    case '$past_year':
+      return { start: fmt(new Date(yyyy - 1, mm, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Resolve a filter value that may be a date preset into operator + concrete
+ * value(s) suitable for the filter API.  For presets, the operator is widened
+ * to a range comparison; for plain values it's returned as-is.
+ */
+export function resolveDateFilterValue(
+  operator: string,
+  value: string | undefined,
+  value2: string | undefined,
+): { operator: string; value: string; value2?: string } | null {
+  if (!value) return null;
+  if (!isDatePreset(value)) return { operator, value, value2 };
+  const range = resolveDatePreset(value);
+  if (!range) return { operator, value, value2 };
+
+  switch (operator) {
+    case 'is':
+      return range.start === range.end
+        ? { operator: 'is', value: range.start }
+        : { operator: 'is_between', value: range.start, value2: range.end };
+    case 'is_between':
+      return { operator: 'is_between', value: range.start, value2: range.end };
+    case 'is_before':
+      return { operator: 'is_before', value: range.start };
+    case 'is_after':
+      return { operator: 'is_after', value: range.end };
+    default:
+      return { operator: 'is_between', value: range.start, value2: range.end };
+  }
 }
 
 // =============================================================================
@@ -449,7 +551,7 @@ export const VIDEO_FIELD_TYPES: CollectionFieldType[] = ['video'];
 export const VIDEO_ID_FIELD_TYPES: CollectionFieldType[] = ['text'];
 
 /** Field types that can be bound to simple text content (excludes rich_text and media/asset types) */
-export const SIMPLE_TEXT_FIELD_TYPES: CollectionFieldType[] = ['text', 'number', 'date', 'email', 'phone'];
+export const SIMPLE_TEXT_FIELD_TYPES: CollectionFieldType[] = ['text', 'number', 'date', 'date_only', 'email', 'phone'];
 
 /** Field types that can be bound to rich text content (excludes media/asset types) */
 export const RICH_TEXT_FIELD_TYPES: CollectionFieldType[] = [...SIMPLE_TEXT_FIELD_TYPES, 'rich_text'];
