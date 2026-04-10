@@ -246,6 +246,7 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
               layerTemplate={layer._filterConfig!.layerTemplate}
               collectionLayerClasses={layer._filterConfig!.collectionLayerClasses}
               collectionLayerTag={layer._filterConfig!.collectionLayerTag}
+              isPublished={layer._filterConfig!.isPublished}
             >
               {content}
             </FilterableCollection>
@@ -803,7 +804,7 @@ const LayerItem: React.FC<{
         if (!inputLayerId) return;
         const nameAttr = inputEl.getAttribute('name');
         if (nameAttr) nameMap[inputLayerId] = nameAttr;
-        if (inputEl.type === 'checkbox') {
+        if (inputEl.type === 'checkbox' || inputEl.type === 'radio') {
           const checked = (inputEl as HTMLInputElement).checked;
           const val = checked ? ((inputEl as HTMLInputElement).value || 'true') : '';
           inputValues[inputLayerId] = val;

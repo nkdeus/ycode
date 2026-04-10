@@ -428,6 +428,7 @@ export interface Layer {
     layerTemplate: Layer[];
     collectionLayerClasses?: string[];
     collectionLayerTag?: string;
+    isPublished?: boolean;
   };
 }
 
