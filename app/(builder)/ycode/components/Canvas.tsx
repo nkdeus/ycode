@@ -18,7 +18,7 @@ import { createRoot, Root } from 'react-dom/client';
 import LayerRenderer from '@/components/LayerRenderer';
 import { serializeLayers, getClassesString } from '@/lib/layer-utils';
 import { collectEditorHiddenLayerIds } from '@/lib/animation-utils';
-import { getCanvasIframeHtml } from '@/lib/canvas-utils';
+import { getCanvasIframeHtml, updateViewportOverrides, measureContentExtent } from '@/lib/canvas-utils';
 import { CanvasPortalProvider } from '@/lib/canvas-portal-context';
 import { cn } from '@/lib/utils';
 import { loadSwiperCss } from '@/lib/slider-utils';
@@ -104,6 +104,8 @@ interface CanvasProps {
   disableEditorHiddenLayers?: boolean;
   /** Current canvas zoom percentage (100 = 100%) */
   zoom?: number;
+  /** Fixed viewport height for stable measurement of content using vh/svh/dvh units */
+  referenceViewportHeight?: number;
 }
 
 /**
@@ -283,6 +285,7 @@ export default function Canvas({
   editingComponentVariables,
   disableEditorHiddenLayers = false,
   zoom = 100,
+  referenceViewportHeight,
 }: CanvasProps) {
   // Refs
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -649,6 +652,10 @@ export default function Canvas({
     const doc = iframeRef.current.contentDocument;
     if (!doc) return;
 
+    // Reset so the first measurement after a breakpoint switch reports immediately
+    // instead of being delayed by the shrink timer
+    lastReportedHeightRef.current = 0;
+
     let shrinkTimer: ReturnType<typeof setTimeout> | undefined;
 
     const reportHeight = (height: number) => {
@@ -694,18 +701,27 @@ export default function Canvas({
         }
       }
 
-      // Page mode: measure full document height
-      const height = Math.max(
-        body.scrollHeight,
-        body.offsetHeight,
-        doc.documentElement?.scrollHeight || 0,
-        doc.documentElement?.offsetHeight || 0
-      );
-      reportHeight(height);
+      // Override viewport-height units (vh, svh, dvh, lvh) with fixed pixel
+      // values so layers using these units don't grow with the iframe height.
+      if (referenceViewportHeight && referenceViewportHeight > 0) {
+        updateViewportOverrides(doc, referenceViewportHeight);
+      }
+
+      // Page mode: use content extent (actual child bounds) rather than
+      // scrollHeight, which inflates when body h-full fills the iframe.
+      const extent = measureContentExtent(doc);
+      if (extent > 0) {
+        reportHeight(extent);
+      }
     };
 
-    // Measure after render
+    // Measure after render — multiple passes to handle Tailwind CDN race.
+    // Tailwind Browser CDN processes classes asynchronously via CSSOM APIs
+    // (not DOM mutations), so the MutationObserver alone can't detect when
+    // styles are applied. measureContentExtent is immune to iframe inflation,
+    // so later passes safely converge to the correct value.
     const timeoutId = setTimeout(measureContent, 100);
+    const lateTimeoutId = setTimeout(measureContent, 500);
 
     // Debounce observer to avoid measuring during transient DOM states
     let observerTimer: ReturnType<typeof setTimeout> | undefined;
@@ -722,13 +738,24 @@ export default function Canvas({
       attributes: true,
     });
 
+    // Also watch <head> for Tailwind CDN style injections that change layout
+    // Without this, the initial measurement fires before CSS is applied,
+    // and no body mutation triggers a re-measure after styles settle.
+    if (doc.head) {
+      observer.observe(doc.head, {
+        childList: true,
+        subtree: true,
+      });
+    }
+
     return () => {
       clearTimeout(timeoutId);
+      clearTimeout(lateTimeoutId);
       clearTimeout(shrinkTimer);
       clearTimeout(observerTimer);
       observer.disconnect();
     };
-  }, [iframeReady, onContentHeightChange, onContentWidthChange, resolvedLayers]);
+  }, [iframeReady, onContentHeightChange, onContentWidthChange, resolvedLayers, referenceViewportHeight, breakpoint]);
 
   // Handle zoom gestures from iframe (Ctrl+wheel, trackpad pinch)
   useEffect(() => {
