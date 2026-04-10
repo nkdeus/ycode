@@ -1980,6 +1980,7 @@ export async function resolveCollectionLayers(
               layerTemplate: layer.children || [],
               collectionLayerClasses: Array.isArray(layer.classes) ? layer.classes : (layer.classes ? [layer.classes] : []),
               collectionLayerTag: layer.name || 'div',
+              isPublished,
             } : undefined,
           };
         } catch (error) {
