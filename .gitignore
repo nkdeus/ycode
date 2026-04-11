@@ -74,3 +74,7 @@ next-env.d.ts
 
 # scripts
 release.sh
+update-eva-temp.*
+
+# local claude settings
+.claude/settings.local.json

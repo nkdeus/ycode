@@ -89,7 +89,9 @@
       "Bash(npx tsx -e ':*)",
       "Bash(npx tsx:*)",
       "Bash(ls knexfile*)",
-      "mcp__ycode__update_layer_link"
+      "mcp__ycode__update_layer_link",
+      "Bash(git push:*)",
+      "Bash(git restore:*)"
     ]
   },
   "enabledMcpjsonServers": [
