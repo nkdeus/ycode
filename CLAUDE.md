@@ -99,3 +99,40 @@ Body (optional): explain WHY, not what. No AI attribution. No filler words.
 ## Environment
 
 Requires `.env.local` with Supabase credentials — see `.env.example`. Database is PostgreSQL via Supabase. Migrations use Knex (`knexfile.ts`).
+
+## YCode MCP — Site Building Best Practices
+
+When building pages via the YCode MCP tools, follow these rules:
+
+### Structure
+- **All sections must be inside `body`** — never leave sections at root level. Use `move_layer` if `add_layout` places them outside body.
+- **Always name sections** — use `update_layer_settings` with `custom_name` on every section/layout added (e.g., "Navigation", "Hero", "Stats Bar", "Features", "Footer").
+- **Use native layouts first** — always check `list_layouts` and use pre-built templates (navigation, hero, stats, features, FAQ, footer, etc.) before building from scratch.
+- **Figma is reference only** — use Figma (`get_design_context`) to extract text content and understand layout intent, not for pixel-perfect replication.
+
+### Colors & Design Tokens
+- **Always use project color variables** — check `list_color_variables` and reference them via `color:var(--<variable-id>)` instead of hardcoded hex values.
+- **Clean up template defaults** — native layouts come with default backgrounds, padding, and borders. Remove or adapt them to match the project design.
+- **Set `isActive: true`** on any design category you apply. Set `isActive: false` to disable a category (e.g., remove unwanted backgrounds).
+
+### Styles
+- **Clear local design before applying a style** — before `apply_style`, use `update_layer_design` to reset the same design categories (set values to `""` and `isActive: false`) so local classes don't conflict with the style.
+- **Name styles lowercase, no spaces** — use kebab-case (e.g., `stat-number`, `card-title`), not `Stat Number`.
+
+### Layers
+- **Leaf elements cannot have children** — text, image, icon, video, input are leaf nodes.
+- **Sections cannot contain other sections** — use div for nested containers.
+- **Use semantic tags** — set `tag: "nav"` for navigation, `tag: "footer"` for footer, `tag: "h1"`-`h6"` for headings via `update_layer_settings`.
+
+### Assets
+- **Upload assets to YCode** — use `upload_asset` to import images from Figma URLs, then reference via `update_layer_image` with the returned `asset_id`.
+- **SVG logos** — get them from Figma via `get_design_context` which returns asset URLs, then upload to YCode.
+
+### Workflow
+1. `list_layouts` — pick the closest native layout
+2. `add_layout` — insert it into the page
+3. `get_layers` — inspect the structure and layer IDs
+4. `move_layer` into `body` if needed + `update_layer_settings` to name it
+5. `get_design_context` from Figma — extract texts and asset URLs
+6. Update texts, images, and styles using YCode MCP tools
+7. Use `list_color_variables` to map colors to project tokens
