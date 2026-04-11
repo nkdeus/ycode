@@ -91,7 +91,11 @@
       "Bash(ls knexfile*)",
       "mcp__ycode__update_layer_link",
       "Bash(git push:*)",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "mcp__ycode__list_components",
+      "mcp__ycode__create_page",
+      "mcp__ycode__get_component",
+      "mcp__ycode__update_page_settings"
     ]
   },
   "enabledMcpjsonServers": [

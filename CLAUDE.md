@@ -106,12 +106,14 @@ When building pages via the YCode MCP tools, follow these rules:
 
 ### Structure
 - **All sections must be inside `body`** — never leave sections at root level. Use `move_layer` if `add_layout` places them outside body.
-- **Always name sections** — use `update_layer_settings` with `custom_name` on every section/layout added (e.g., "Navigation", "Hero", "Stats Bar", "Features", "Footer").
-- **Use native layouts first** — always check `list_layouts` and use pre-built templates (navigation, hero, stats, features, FAQ, footer, etc.) before building from scratch.
+- **Never add NAV or FOOTER** — the NAV and FOOTER are reusable components added manually by the user in the editor. Do not create navigation or footer sections on new pages.
+- **Always name sections** — use `update_layer_settings` with `custom_name` on every section/layout added (e.g., "Hero", "Stats Bar", "Features").
+- **Use native layouts first** — always check `list_layouts` and use pre-built templates (hero, stats, features, FAQ, etc.) before building from scratch.
 - **Figma is reference only** — use Figma (`get_design_context`) to extract text content and understand layout intent, not for pixel-perfect replication.
 
 ### Colors & Design Tokens
-- **Always use project color variables** — check `list_color_variables` and reference them via `color:var(--<variable-id>)` instead of hardcoded hex values.
+- **Always use project color variables** — check `list_color_variables` and reference them via `color:var(--<variable-id>)` instead of hardcoded hex values. Never hardcode colors that already exist as variables.
+- **Match the homepage style** — always study the homepage (`list_pages` → `get_layers`) before building a new page. Reuse the same color variables, spacing patterns, and design tokens to ensure visual consistency across pages.
 - **Clean up template defaults** — native layouts come with default backgrounds, padding, and borders. Remove or adapt them to match the project design.
 - **Set `isActive: true`** on any design category you apply. Set `isActive: false` to disable a category (e.g., remove unwanted backgrounds).
 
@@ -128,11 +130,23 @@ When building pages via the YCode MCP tools, follow these rules:
 - **Upload assets to YCode** — use `upload_asset` to import images from Figma URLs, then reference via `update_layer_image` with the returned `asset_id`.
 - **SVG logos** — get them from Figma via `get_design_context` which returns asset URLs, then upload to YCode.
 
+### Hero Section Pattern
+New pages must follow the homepage hero structure:
+- **Section**: `flex col, items-center, pt-140, pb-140`, bg `Background Light` var
+- **Container div**: `flex col, max-w-1280, w-100%, px-32`
+- **Grid**: `grid 2 cols, gap-72, items-center` (responsive: 1 col on tablet)
+- **Heading**: apply `h1` style (Manrope 800, tracking -0.03em), override fontSize as needed, set 36px on mobile
+- **Description**: fontSize 20, color `#33363a`, lineHeight 1.6
+- **Buttons**: use existing `cta` style, not custom gradient backgrounds
+- **Image**: `w-100%, min-h-440, object-contain, rounded-24`
+
 ### Workflow
-1. `list_layouts` — pick the closest native layout
-2. `add_layout` — insert it into the page
-3. `get_layers` — inspect the structure and layer IDs
-4. `move_layer` into `body` if needed + `update_layer_settings` to name it
-5. `get_design_context` from Figma — extract texts and asset URLs
-6. Update texts, images, and styles using YCode MCP tools
-7. Use `list_color_variables` to map colors to project tokens
+1. **Study the homepage first** — `get_layers` on homepage to understand spacing, colors, and structure patterns
+2. `list_layouts` — pick the closest native layout
+3. `add_layout` — insert it into the page
+4. `get_layers` — inspect the structure and layer IDs
+5. `move_layer` into `body` if needed + `update_layer_settings` to name it
+6. `get_design_context` from Figma — extract texts and asset URLs
+7. Update texts, images, and styles using YCode MCP tools
+8. Use `list_color_variables` to map colors to project tokens
+9. Apply existing `list_styles` — reuse h1, cta, nav-link, etc. instead of custom design
