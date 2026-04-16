@@ -5,6 +5,7 @@ import { formatFieldValue, resolveFieldFromSources } from '@/lib/cms-variables-u
 import { generateLinkHref, type LinkResolutionContext } from '@/lib/link-utils';
 import { contentHasBlockElements, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
 import { applyComponentOverrides, resolveComponents } from '@/lib/resolve-components';
+import HtmlEmbedRenderer from '@/components/HtmlEmbedRenderer';
 
 /**
  * Context for resolving rich text links - re-exports LinkResolutionContext for backwards compatibility
@@ -584,6 +585,14 @@ function renderInlineContent(
       return rendered ? [rendered] : [];
     }
 
+    // Handle HTML embed nodes that may appear inline from CMS rich_text expansion
+    if (node.type === 'richTextHtmlEmbed') {
+      const htmlCode = node.attrs?.code || '';
+      if (!htmlCode) return [];
+
+      return [React.createElement(HtmlEmbedRenderer, { key, code: htmlCode })];
+    }
+
     // Handle richTextImage nodes that may appear inline from CMS rich_text expansion
     if (node.type === 'richTextImage') {
       const imgProps: Record<string, any> = {
@@ -855,6 +864,14 @@ function renderBlock(
   // Handle embedded component blocks
   if (block.type === 'richTextComponent' && block.attrs?.componentId) {
     return renderRichTextComponentBlock(block, key, components, renderComponentBlock, ancestorComponentIds);
+  }
+
+  // Handle HTML embed blocks
+  if (block.type === 'richTextHtmlEmbed') {
+    const htmlCode = block.attrs?.code || '';
+    if (!htmlCode) return null;
+
+    return React.createElement(HtmlEmbedRenderer, { key, code: htmlCode });
   }
 
   return null;

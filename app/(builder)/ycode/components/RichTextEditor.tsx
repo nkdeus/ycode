@@ -62,11 +62,14 @@ import { createDynamicVariableNodeView } from '@/lib/dynamic-variable-view';
 import { RichTextComponent } from '@/lib/tiptap-extensions/rich-text-component';
 import { RichTextLink, getLinkSettingsFromMark } from '@/lib/tiptap-extensions/rich-text-link';
 import { RichTextImage } from '@/lib/tiptap-extensions/rich-text-image';
+import { RichTextHtmlEmbed } from '@/lib/tiptap-extensions/rich-text-html-embed';
 import RichTextLinkPopover from './RichTextLinkPopover';
 import RichTextImagePopover from './RichTextImagePopover';
 import RichTextComponentPicker from './RichTextComponentPicker';
 import RichTextComponentBlock from './RichTextComponentBlock';
 import RichTextImageBlock from './RichTextImageBlock';
+import RichTextHtmlEmbedBlock from './RichTextHtmlEmbedBlock';
+import RichTextHtmlEmbedDialog from './RichTextHtmlEmbedDialog';
 import type { CollectionFieldType, Layer, LinkSettings, LinkType, Asset } from '@/types';
 import { DEFAULT_TEXT_STYLES } from '@/lib/text-format-utils';
 import { useEditorStore } from '@/stores/useEditorStore';
@@ -265,6 +268,75 @@ const RichTextImageWithNodeView = RichTextImage.extend({
 });
 
 /**
+ * RichTextHtmlEmbed with React node view for inline HTML embed editing.
+ * Renders a placeholder block with edit/delete controls.
+ */
+const RichTextHtmlEmbedWithNodeView = RichTextHtmlEmbed.extend({
+  addNodeView() {
+    return ({ node: initialNode, getPos, editor }) => {
+      const container = document.createElement('div');
+      container.className = 'my-2';
+      container.contentEditable = 'false';
+
+      let currentNode = initialNode;
+      let isSelected = false;
+
+      const root = createRoot(container);
+
+      const renderBlock = () => {
+        const code = currentNode.attrs.code || '';
+
+        const handleEditClick = () => {
+          const ctx = (editor.storage as Record<string, any>).richTextHtmlEmbed ?? {};
+          ctx.openDialog?.(code, getPos());
+        };
+
+        const handleDelete = () => {
+          const pos = getPos();
+          if (typeof pos === 'number') {
+            editor.chain().focus().deleteRange({ from: pos, to: pos + currentNode.nodeSize }).run();
+          }
+        };
+
+        root.render(
+          <RichTextHtmlEmbedBlock
+            code={code}
+            isEditable={editor.isEditable}
+            isSelected={isSelected}
+            onEditClick={handleEditClick}
+            onDelete={handleDelete}
+          />,
+        );
+      };
+
+      queueMicrotask(renderBlock);
+
+      return {
+        dom: container,
+        stopEvent: () => true,
+        selectNode: () => {
+          isSelected = true;
+          renderBlock();
+        },
+        deselectNode: () => {
+          isSelected = false;
+          renderBlock();
+        },
+        update: (updatedNode) => {
+          if (updatedNode.type.name !== 'richTextHtmlEmbed') return false;
+          currentNode = updatedNode;
+          renderBlock();
+          return true;
+        },
+        destroy: () => {
+          setTimeout(() => root.unmount(), 0);
+        },
+      };
+    };
+  },
+});
+
+/**
  * Custom Tiptap mark for dynamic text styles
  * Preserves the style keys from canvas text editor without applying visual styling
  */
@@ -343,6 +415,9 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
   const [linkPopoverOpen, setLinkPopoverOpen] = useState(false);
   const [imagePopoverOpen, setImagePopoverOpen] = useState(false);
   const [componentPickerOpen, setComponentPickerOpen] = useState(false);
+  const [htmlEmbedDialogOpen, setHtmlEmbedDialogOpen] = useState(false);
+  const [htmlEmbedDialogCode, setHtmlEmbedDialogCode] = useState('');
+  const htmlEmbedDialogPosRef = useRef<number | null>(null);
   const openFileManager = useEditorStore((s) => s.openFileManager);
   // Track if update is coming from editor to prevent infinite loop
   const isInternalUpdateRef = useRef(false);
@@ -391,6 +466,7 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
         Blockquote,
         Code,
         RichTextImageWithNodeView,
+        RichTextHtmlEmbedWithNodeView,
         HorizontalRule,
       ];
 
@@ -535,6 +611,21 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
       editorContext: { fieldGroups, allFields, collections, isInsideCollectionLayer },
     };
   }, [editor, fieldGroups, allFields, collections, isInsideCollectionLayer]);
+
+  // Sync HTML embed dialog opener into editor storage so the node view can trigger it
+  useEffect(() => {
+    if (!editor) return;
+    const storage = editor.storage as Record<string, any>;
+    storage.richTextHtmlEmbed = {
+      ...storage.richTextHtmlEmbed,
+      openDialog: (code: string, pos: number | (() => number | undefined)) => {
+        const resolvedPos = typeof pos === 'function' ? pos() : pos;
+        setHtmlEmbedDialogCode(code);
+        htmlEmbedDialogPosRef.current = typeof resolvedPos === 'number' ? resolvedPos : null;
+        setHtmlEmbedDialogOpen(true);
+      },
+    };
+  }, [editor]);
 
   // Update editor content when value or fields change externally
   useEffect(() => {
@@ -1060,6 +1151,20 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
                 <Icon name="component" className="size-3" />
               </button>
             </ToggleGroupItem>
+            <ToggleGroupItem
+              value="htmlEmbed"
+              asChild
+            >
+              <button
+                type="button"
+                title="Insert HTML Embed"
+                disabled={disabled}
+                className="w-auto min-w-0 shrink-0"
+                onClick={() => editor.chain().focus().insertHtmlEmbed().run()}
+              >
+                <Icon name="code" className="size-3" />
+              </button>
+            </ToggleGroupItem>
           </ToggleGroup>
 
           <div className="flex-1" />
@@ -1359,6 +1464,17 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
           >
             <Icon name="component" className="size-3" />
           </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="size-6!"
+            title="Insert HTML Embed"
+            disabled={disabled}
+            onClick={() => editor.chain().focus().insertHtmlEmbed().run()}
+          >
+            <Icon name="code" className="size-3" />
+          </Button>
 
           <div className="flex-1" />
 
@@ -1438,6 +1554,27 @@ const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(({
           editor?.chain().focus().insertComponent({ componentId }).run();
         }}
         disabled={disabled}
+      />
+
+      <RichTextHtmlEmbedDialog
+        open={htmlEmbedDialogOpen}
+        onOpenChange={setHtmlEmbedDialogOpen}
+        code={htmlEmbedDialogCode}
+        onSave={(newCode) => {
+          if (!editor) return;
+          const pos = htmlEmbedDialogPosRef.current;
+          if (typeof pos === 'number') {
+            const node = editor.state.doc.nodeAt(pos);
+            if (node?.type.name === 'richTextHtmlEmbed') {
+              const tr = editor.state.tr.setNodeMarkup(pos, undefined, {
+                ...node.attrs,
+                code: newCode,
+              });
+              editor.view.dispatch(tr);
+            }
+          }
+          htmlEmbedDialogPosRef.current = null;
+        }}
       />
     </div>
   );

@@ -1390,7 +1390,7 @@ function resolveRichTextVariables(
       n?.type === 'paragraph' || n?.type === 'heading' ||
       n?.type === 'bulletList' || n?.type === 'orderedList' ||
       n?.type === 'richTextComponent' || n?.type === 'richTextImage' ||
-      n?.type === 'horizontalRule';
+      n?.type === 'richTextHtmlEmbed' || n?.type === 'horizontalRule';
     const hasBlockChildren = result.content.some(isBlockNode);
     if (hasBlockChildren) {
       const lifted: any[] = [];
@@ -3264,6 +3264,12 @@ function renderTiptapToHtml(
       );
     }
     return `<div data-component-id="${escapeHtml(content.attrs.componentId)}"></div>`;
+  }
+
+  // Handle HTML embed blocks — render empty placeholder;
+  // HtmlEmbedRenderer injects the code client-side via useEffect
+  if (content.type === 'richTextHtmlEmbed') {
+    return '';
   }
 
   // Fallback: recursively process content
