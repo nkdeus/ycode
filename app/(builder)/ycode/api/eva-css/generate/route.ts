@@ -121,35 +121,30 @@ export async function POST() {
       });
     }
 
-    // 4. Auto-include ALL pixel values found in layers into the config
-    //    so that variables (--200, --200__, etc.) are always generated
+    // 4. Filter arbitrary classes: keep only those whose px value is in the
+    //    user's config (sizes or fontSizes). Out-of-config classes fall
+    //    through to Tailwind's native arbitrary-value generation — they
+    //    render as literal pixels (non-fluid), as intended.
     const fontPrefixes = new Set(['text-']);
-    const foundSizes = new Set(config.sizes);
-    const foundFontSizes = new Set(config.fontSizes);
+    const configSizes = new Set(config.sizes);
+    const configFontSizes = new Set(config.fontSizes);
 
-    for (const cls of arbitraryClasses) {
+    const evaClasses = arbitraryClasses.filter((cls) => {
       const m = cls.match(/^([a-z]+-?(?:[a-z]+-)?)\[(\d+)px\]/);
-      if (!m) continue;
+      if (!m) return false;
       const px = parseInt(m[2], 10);
-      if (fontPrefixes.has(m[1])) {
-        foundFontSizes.add(px);
-      } else {
-        foundSizes.add(px);
-      }
-    }
+      return fontPrefixes.has(m[1])
+        ? configFontSizes.has(px)
+        : configSizes.has(px);
+    });
 
-    const mergedConfig = {
-      ...config,
-      sizes: [...foundSizes].sort((a, b) => a - b),
-      fontSizes: [...foundFontSizes].sort((a, b) => a - b),
-    };
-
-    // 5. Generate bridge CSS (dynamic import keeps the package tree-shakeable)
+    // 5. Generate bridge CSS from the user config only (dynamic import keeps
+    //    the package tree-shakeable)
     const { generateVars, generateClassOverrides } = await import(
       'eva-css-for-tailwind'
     );
-    let vars = generateVars(mergedConfig) as string;
-    const overrides = generateClassOverrides(arbitraryClasses, mergedConfig);
+    let vars = generateVars(config) as string;
+    const overrides = generateClassOverrides(evaClasses, config);
 
     // 5b. Post-process: custom extreme floor if configured
     if (config.extremeFloor != null && config.extremeFloor > 0) {
@@ -178,11 +173,15 @@ export async function POST() {
     // 7. Inject into custom_code_head (published pages render this SSR)
     await injectIntoCustomCodeHead(bridgeCss);
 
+    const skipped = arbitraryClasses.length - evaClasses.length;
     return noCache({
       data: {
-        classCount: arbitraryClasses.length,
+        classCount: evaClasses.length,
+        skipped,
         bridgeCss,
-        message: `Generated bridge CSS for ${arbitraryClasses.length} classes.`,
+        message:
+          `Generated bridge CSS for ${evaClasses.length} in-config classes` +
+          (skipped > 0 ? ` (${skipped} out-of-config left as static px).` : '.'),
       },
     });
   } catch (error) {

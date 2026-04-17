@@ -98,56 +98,119 @@
   }
 
   // ===========================================================================
-  // 2. Constrain sizing inputs with datalists
+  // 2. Suggest Eva values via a floating picker (no autocomplete filtering)
   // ===========================================================================
+  //
+  // Previous implementation used native <datalist>, which filters options as
+  // the user types and only exposes values from the config. The new picker:
+  //   - Always shows the FULL list of Eva values (no text-based filtering)
+  //   - Never snaps / rewrites the user's value — custom px stay custom
+  //   - Skips min-width / max-width / min-height / max-height inputs
+  //     (identified by placeholder="Min" / "Max" in SizingControls.tsx)
 
-  const DATALIST_IDS = {
-    spacing: 'eva-dl-spacing',
-    fontSizes: 'eva-dl-fontsizes',
-  };
+  const KIND = { spacing: 'spacing', fontSizes: 'fontSizes' };
 
-  function createDatalist(id, values) {
-    let dl = document.getElementById(id);
-    if (dl) return dl;
-
-    dl = document.createElement('datalist');
-    dl.id = id;
-    for (const v of values) {
-      const opt = document.createElement('option');
-      opt.value = String(v);
-      dl.appendChild(opt);
-    }
-    document.body.appendChild(dl);
-    return dl;
-  }
-
-  function ensureDataLists() {
-    createDatalist(DATALIST_IDS.spacing, evaConfig.sizes);
-    createDatalist(DATALIST_IDS.fontSizes, evaConfig.fontSizes);
-  }
-
-  /** Get the allowed values array for a datalist ID */
-  function getAllowedValues(datalistId) {
-    if (datalistId === DATALIST_IDS.fontSizes) return evaConfig.fontSizes;
-    if (datalistId === DATALIST_IDS.spacing) return evaConfig.sizes;
+  function getValuesForKind(kind) {
+    if (kind === KIND.fontSizes) return evaConfig.fontSizes;
+    if (kind === KIND.spacing) return evaConfig.sizes;
     return null;
   }
 
-  /** Snap a numeric value to the nearest allowed Eva value */
-  function snapToNearest(value, allowedValues) {
-    const num = parseInt(value, 10);
-    if (isNaN(num) || !allowedValues?.length) return value;
-    let closest = allowedValues[0];
-    let minDist = Math.abs(num - closest);
-    for (const v of allowedValues) {
-      const dist = Math.abs(num - v);
-      if (dist < minDist) { closest = v; minDist = dist; }
+  // ---- Floating picker singleton ------------------------------------------
+
+  let evaPicker = null;
+  let evaPickerInput = null;
+
+  function ensurePicker() {
+    if (evaPicker) return evaPicker;
+
+    evaPicker = document.createElement('div');
+    evaPicker.id = 'eva-value-picker';
+    evaPicker.style.cssText = `
+      position: fixed;
+      z-index: 99998;
+      display: none;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px;
+      max-width: 260px;
+      background: #1a1a2e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+      font-family: system-ui, sans-serif;
+      font-size: 11px;
+    `;
+    // Prevent blur-triggered close when clicking inside the panel
+    evaPicker.addEventListener('mousedown', (e) => e.preventDefault());
+    document.body.appendChild(evaPicker);
+    return evaPicker;
+  }
+
+  function hidePicker() {
+    if (evaPicker) evaPicker.style.display = 'none';
+    evaPickerInput = null;
+  }
+
+  function showPickerFor(input, kind) {
+    const values = getValuesForKind(kind);
+    if (!values || values.length === 0) return;
+
+    const panel = ensurePicker();
+    evaPickerInput = input;
+    panel.innerHTML = '';
+
+    for (const v of values) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.textContent = String(v);
+      chip.style.cssText = `
+        padding: 3px 8px;
+        border-radius: 4px;
+        border: 1px solid #444;
+        background: transparent;
+        color: #ddd;
+        font-family: monospace;
+        font-size: 11px;
+        cursor: pointer;
+      `;
+      chip.addEventListener('mouseenter', () => {
+        chip.style.borderColor = '#6366f1';
+        chip.style.color = '#fff';
+      });
+      chip.addEventListener('mouseleave', () => {
+        chip.style.borderColor = '#444';
+        chip.style.color = '#ddd';
+      });
+      chip.addEventListener('click', () => {
+        const target = evaPickerInput;
+        if (!target) return;
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype, 'value'
+        ).set;
+        nativeSetter.call(target, String(v));
+        target.dispatchEvent(new Event('input', { bubbles: true }));
+        target.dispatchEvent(new Event('change', { bubbles: true }));
+        target.focus();
+      });
+      panel.appendChild(chip);
     }
-    return String(closest);
+
+    // Position below the input
+    const rect = input.getBoundingClientRect();
+    panel.style.display = 'flex';
+    const panelRect = panel.getBoundingClientRect();
+    const left = Math.max(8, Math.min(
+      window.innerWidth - panelRect.width - 8,
+      rect.left
+    ));
+    const top = rect.bottom + 4;
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
   }
 
   function attachDatalistsToInputs() {
-    // Only constrain inputs in the editor, not on settings/integrations pages
+    // Only suggest inputs in the editor, not on settings/integrations pages
     if (window.location.pathname.startsWith('/ycode/integrations/')) return;
     if (window.location.pathname.startsWith('/ycode/settings/')) return;
 
@@ -158,38 +221,33 @@
     for (const input of inputs) {
       if (input.dataset.evaProcessed) continue;
 
-      const datalistId = resolveDatalistForInput(input);
-      if (datalistId) {
-        input.setAttribute('list', datalistId);
-        input.dataset.evaProcessed = 'true';
+      const kind = resolveKindForInput(input);
+      if (!kind) continue;
 
-        // Enforce: snap to nearest Eva value on blur
-        const allowedValues = getAllowedValues(datalistId);
-        input.addEventListener('blur', () => {
-          const raw = input.value.trim();
-          if (!raw || !/^\d+$/.test(raw)) return;
-          const snapped = snapToNearest(raw, allowedValues);
-          if (snapped !== raw) {
-            // Set value and trigger React's onChange
-            const nativeSetter = Object.getOwnPropertyDescriptor(
-              HTMLInputElement.prototype, 'value'
-            ).set;
-            nativeSetter.call(input, snapped);
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-            console.log(`[Eva CSS] Snapped ${raw} → ${snapped}`);
-          }
-        });
-      }
+      input.dataset.evaProcessed = 'true';
+      // Ensure native datalist cannot reappear for this input
+      input.removeAttribute('list');
+
+      input.addEventListener('focus', () => showPickerFor(input, kind));
+      input.addEventListener('blur', () => {
+        // Delay so chip clicks register before hide
+        setTimeout(() => {
+          if (evaPickerInput === input) hidePicker();
+        }, 150);
+      });
     }
   }
 
-  function resolveDatalistForInput(input) {
+  function resolveKindForInput(input) {
+    // Skip min-/max- sizing inputs — identified by their placeholder
+    const placeholder = (input.getAttribute('placeholder') || '').trim();
+    if (placeholder === 'Min' || placeholder === 'Max') return null;
+
     const context = getContextText(input).toLowerCase();
 
     if (context.includes('font') || context.includes('typography')) {
       const group = input.closest('[data-slot="input-group"]');
-      if (group) return DATALIST_IDS.fontSizes;
+      if (group) return KIND.fontSizes;
     }
 
     if (
@@ -201,7 +259,7 @@
       context.includes('spacing') ||
       context.includes('layout')
     ) {
-      return DATALIST_IDS.spacing;
+      return KIND.spacing;
     }
 
     return null;
@@ -490,9 +548,7 @@
   // 4. MutationObserver — run on DOM changes
   // ===========================================================================
 
-  ensureDataLists();
-
-  // Throttled DOM observer — only for attaching datalists to new inputs.
+  // Throttled DOM observer — attaches the Eva picker to new inputs.
   // No .closest() calls in the callback to avoid forced reflows.
   let observerTimeout = null;
   const observer = new MutationObserver(() => {
