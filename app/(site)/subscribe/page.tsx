@@ -3,7 +3,7 @@ import { getAllComponents } from '@/lib/repositories/componentRepository';
 import { resolveComponents } from '@/lib/resolve-components';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import type { Layer, Page } from '@/types';
-import HelloMikaMount from './Subscribe';
+import SubscribeMount from './Subscribe';
 
 export const revalidate = false;
 
@@ -73,7 +73,7 @@ export default async function CustomPage() {
         globalCustomCodeBody={globalSettings.globalCustomCodeBody}
         ycodeBadge={globalSettings.ycodeBadge}
       />
-      <HelloMikaMount />
+      <SubscribeMount />
     </>
   );
 }

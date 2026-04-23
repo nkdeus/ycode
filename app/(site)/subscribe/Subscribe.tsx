@@ -3,6 +3,12 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { set } from 'lodash';
+
+const apiUrl = 'https://api.conciergerieeasystay.fr';
+// const apiUrl = 'http://localhost:3000';
 
 type Product = {
   id: number;
@@ -45,8 +51,6 @@ function transformStripeData(data: {
   });
 }
 
-const apiUrl = 'https://api.conciergerieeasystay.fr';
-
 /**
  * Formate le texte de facturation pour l'affichage
  * Convertit "unit" → "logement" et traduit les intervalles (month → mois, year → an/ans)
@@ -80,34 +84,206 @@ function formatBillingText(
   return parts.join(' / ');
 }
 
-function HelloMika() {
-  const [count, setCount] = useState(0);
-  const [products, setProducts] = useState<Product[]>([]);
+function SuccessMessage({ type }: { type: 'EXISTING_USER' | 'NEW_USER' }) {
+  const message = type === 'EXISTING_USER'
+    ? 'Votre abonnement a été mis à jour avec succès. Vous pouvez maintenant accéder à votre application pour gérer vos propriétés.'
+    : 'Merci pour votre abonnement ! Vous pouvez maintenant accéder à votre application pour gérer vos propriétés.\n Un email vous a été envoyé avec les détails pour vous connecter à votre compte.';
+  return (
+    <div className='bg-green-50 border border-green-200 text-green-700 rounded-lg p-6 text-center'>
+      <h2 className='text-2xl font-bold mb-4'>Abonnement mis à jour avec succès !</h2>
+      <p className='text-lg'>{message}</p>
+      <button
+        onClick={() => window.location.href = '/'}
+        className='mt-6 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors'
+      >
+        Retour à l&apos;accueil
+      </button>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    async function fetchProducts() {
-      try {
-        const res = await fetch(`${apiUrl}/subscriptions/products`);
+function EmailForm({ product }: { product: Product }) {
+  const [email, setEmail] = useState<string>('');
+  const [propertyNumber, setPropertyNumber] = useState<number | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [tokenMendatory, setTokenMandatory] = useState(false);
+  const [token, setToken] = useState<string | undefined>(undefined);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [propertyNumberAlreadyUsed, setPropertyNumberAlreadyUsed] = useState<number | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (email && propertyNumber) {
+      console.log('Submitting subscription for product:', product);
+      console.log('Email:', email);
+      console.log('Property Number:', propertyNumber);
+      console.log('Token:', token);
+      const res = await fetch(`${apiUrl}/subscriptions/create-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email,
+          propertyNumber,
+          priceId: product.priceId,
+          token: tokenMendatory ? token : undefined,
+        }),
+      });
+
+      if (res.ok) {
         const data = await res.json();
-        setProducts(transformStripeData(data));
-      } catch (error) {
-        console.error('Error fetching products:', error);
-      }    
+        if (data.success) {
+          setSubmitted(true);
+          if (data.object && data.object === 'subscription') {
+            setSuccessMessage('Votre abonnement a été mis à jour avec succès. Vous pouvez maintenant accéder à votre application pour gérer vos propriétés.');
+          }
+          if (data.session && data.session.url) {
+            window.location.href = data.session.url;
+          }
+        } else {
+          if (data.tokenNeeded) {
+            setTokenMandatory(true);
+          }
+          if (data.propertyNumber && data.propertyNumber > (propertyNumber ?? 0)) {
+            setPropertyNumberAlreadyUsed(data.propertyNumber);
+          }
+        }
+        console.log('Subscription session created:', data);
+      } else {
+        console.error('Failed to create subscription session');
+        const errorData = await res.json();
+        setErrorMessage(errorData.message || 'Une erreur est survenue. Veuillez réessayer.');
+      }
     }
-    fetchProducts();
-  }, []);
+  }
 
-  function subscribeToProduct(product: Product) {
-    console.log('Subscribing to product:', product);
+  if (successMessage) {
+    return (
+      <SuccessMessage type={'EXISTING_USER'} />
+    );
   }
 
   return (
-    <div className='flex flex-col items-center gap-12 py-24 px-4 max-w-7xl mx-auto w-full'>
-      <div className='text-center'>
-        <h1 className='text-6xl font-bold mb-4'>Hello Mika</h1>
-        <p className='text-lg text-neutral-600'>
-          Voici les produits disponibles :
+    <div className='w-full max-w-md mx-auto'>
+      {/* Header */}
+      <div className='mb-8 text-center'>
+        <h2 className='text-3xl font-bold text-neutral-900 mb-2'>
+          Finalisez votre abonnement
+        </h2>
+        <p className='text-neutral-600'>
+          Produit: <span className='font-semibold'>{product.name}</span>
         </p>
+      </div>
+
+      {/* Form Card */}
+      <div className='bg-white rounded-lg shadow-md border border-neutral-200 p-8'>
+        <form onSubmit={handleSubmit} className='space-y-6'>
+          {/* Email Field */}
+          <div className='space-y-2'>
+            <Label htmlFor='email' className='text-sm font-medium text-neutral-700'>
+              Adresse e-mail
+            </Label>
+            <Input
+              id='email'
+              type='email'
+              placeholder='exemple@email.com'
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              className='w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition'
+            />
+            <p className='text-xs text-neutral-500 mt-1'>
+              Si vous avez déjà un compte EasyStay, utilisez le même email.
+            </p>
+          </div>
+
+          {/* Property Number Field */}
+          <div className='space-y-2'>
+            <Label htmlFor='propertyNumber' className='text-sm font-medium text-neutral-700'>
+              Nombre de propriétés à gérer
+            </Label>
+            <Input
+              id='propertyNumber'
+              type='number'
+              placeholder='Ex: 3'
+              value={propertyNumber ?? ''}
+              onChange={(e) => setPropertyNumber(e.target.value ? parseInt(e.target.value) : null)}
+              required
+              className='w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition'
+            />
+            {propertyNumberAlreadyUsed && propertyNumberAlreadyUsed > (propertyNumber ?? 0) && (
+              <p className='text-xs text-red-500 mt-1'>
+                Vous avez déjà {propertyNumberAlreadyUsed} propriétés sur votre application. Le nombre de propriétés doit être au moins {propertyNumberAlreadyUsed}.
+              </p>
+            )}
+          </div>
+
+          {tokenMendatory && (
+            <div className='space-y-2'>
+              <Label htmlFor='token' className='text-sm font-medium text-neutral-700'>Pour la sécurité de votre compte, un token de validation a été envoyé à votre adresse email.</Label>
+              <Input
+                id='token'
+                type='text'
+                placeholder='Entrez votre token'
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                required
+                className='w-full px-4 py-2 border border-neutral-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition'
+              />
+            </div>
+          )}
+
+          {/* Price Summary */}
+          <div className='bg-blue-50 border border-blue-200 rounded-lg p-4'>
+            <p className='text-sm text-neutral-600 mb-1'>Prix de l&apos;abonnement</p>
+            <div className='flex items-baseline gap-2'>
+              <span className='text-2xl font-bold text-neutral-900'>
+                {(product.unit_amount / 100).toFixed(2)}€
+              </span>
+              {(product.billing_scheme === 'per_unit' || product.recurring) && (
+                <span className='text-sm text-neutral-600'>
+                  / {formatBillingText(product.billing_scheme, product.recurring?.interval, product.recurring?.interval_count)}
+                </span>
+              )}
+            </div>
+          </div>
+          {errorMessage && (
+            <div className='bg-red-50 border border-red-200 text-red-700 rounded-lg p-4'>
+              {errorMessage}
+            </div>
+          )}
+          {/* Submit Button */}
+          <Button
+            type='submit'
+            disabled={!email || !propertyNumber || submitted}
+            className='w-full bg-blue-600 hover:bg-blue-700 disabled:bg-neutral-300 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200'
+          >
+            {submitted ? '✓ Abonnement en cours...' : 'S\'abonner maintenant'}
+          </Button>
+        </form>
+
+        {/* Back Link */}
+        <button
+          type='button'
+          onClick={() => window.location.reload()}
+          className='w-full mt-4 text-sm text-neutral-600 hover:text-neutral-900 font-medium transition'
+        >
+          ← Retour aux produits
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SelectProduct({ products, onSelect }: { products: Product[]; onSelect: (product: Product) => void }) {
+  return (
+    <div>
+      <div className='text-center'>
+        <h1 className='text-2xl heading text-neutral-600'>
+          Tarifs
+        </h1>
       </div>
       
       <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full'>
@@ -157,7 +333,7 @@ function HelloMika() {
 
               {/* Subscribe Button */}
               <Button
-                onClick={() => subscribeToProduct(product)}
+                onClick={() => onSelect(product)}
                 className='w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition-colors'
               >
                 Subscribe
@@ -166,7 +342,69 @@ function HelloMika() {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
 
+function Subscribe() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [sessionCreated, setSessionCreated] = useState<'EXISTING_USER' | 'NEW_USER' | null>(null);
+  const queryParams = new URLSearchParams(window.location.search);
+  console.log('Query params:', Object.fromEntries(queryParams.entries()));
+  useEffect(() => {
+    async function fetchProducts() {
+      try {
+        const res = await fetch(`${apiUrl}/subscriptions/products`);
+        const data = await res.json();
+        setProducts(transformStripeData(data));
+      } catch (error) {
+        console.error('Error fetching products:', error);
+      }    
+    }
+    async function handlePostSubscription(session_id: string) {
+      try {
+        const res = await fetch(`${apiUrl}/subscriptions/success?session_id=${session_id}`);
+        const data = await res.json();
+        if (data.subscription.object === 'subscription' && data.subscription.status === 'active') {
+          setSessionCreated(data.type);
+        } else {
+          setSessionCreated(null);
+        }
+      } catch (error) {
+        console.error('Error handling post-subscription:', error);
+        setSessionCreated(null);
+      }
+    }
+    const queryParamsObject = Object.fromEntries(queryParams.entries());
+    if (queryParamsObject.session_id) {
+      handlePostSubscription(queryParamsObject.session_id);
+    } else {
+      fetchProducts();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function subscribeToProduct(product: Product) {
+    setSelectedProduct(product);
+    console.log('Subscribing to product:', product);
+  }
+
+  if (sessionCreated) {
+    return (
+      <SuccessMessage type={sessionCreated} />
+    );
+
+  }
+
+  return (
+    <div className='flex flex-col items-center gap-12 py-24 px-4 max-w-7xl mx-auto w-full'>
+      
+      {selectedProduct ? (
+        <EmailForm product={selectedProduct} />
+      ) : (
+        <SelectProduct products={products} onSelect={subscribeToProduct} />
+      )}
       {/* Empty State */}
       {products.length === 0 && (
         <div className='text-center py-12'>
@@ -177,7 +415,7 @@ function HelloMika() {
   );
 }
 
-export default function HelloMikaMount() {
+export default function SubscribeMount() {
   const [target, setTarget] = useState<Element | null>(null);
 
   useEffect(() => {
@@ -185,5 +423,5 @@ export default function HelloMikaMount() {
   }, []);
 
   if (!target) return null;
-  return createPortal(<HelloMika />, target);
+  return createPortal(<Subscribe />, target);
 }
