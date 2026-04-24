@@ -590,14 +590,25 @@ export default function HeaderBar({
           variant="secondary"
           onClick={() => {
             if (isPreviewMode) {
-              // Exit preview mode
               setPreviewMode(false);
               updateQueryParams({ preview: undefined });
-            } else {
-              // Enter preview mode
-              setPreviewMode(true);
-              updateQueryParams({ preview: 'true' });
+              return;
             }
+
+            setPreviewMode(true);
+
+            // Preview renders the current page, so when invoked from a non-design
+            // route (CMS, forms, etc.) we need to jump to the layers view first
+            const isDesignRoute = routeType === 'layers' || routeType === 'page' || routeType === 'component' || routeType === null;
+            if (!isDesignRoute && currentPageId) {
+              setActiveSidebarTab('layers');
+              const params = new URLSearchParams(window.location.search);
+              params.set('preview', 'true');
+              router.push(`/ycode/layers/${currentPageId}?${params.toString()}`);
+              return;
+            }
+
+            updateQueryParams({ preview: 'true' });
           }}
           disabled={!currentPage || isSaving}
           className={isPreviewMode ? 'bg-black text-white hover:bg-black/90 dark:bg-white dark:text-black dark:hover:bg-white/90' : ''}
