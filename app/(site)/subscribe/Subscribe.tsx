@@ -5,10 +5,23 @@ import { createPortal } from 'react-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { set } from 'lodash';
 
 const apiUrl = 'https://api.conciergerieeasystay.fr';
 // const apiUrl = 'http://localhost:3000';
+
+function slugify(s: string) {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function findProductBySlug(products: Product[], slug: string | null): Product | null {
+  if (!slug) return null;
+  return products.find(p => slugify(p.name) === slug || p.priceId === slug) || null;
+}
 
 type Product = {
   id: number;
@@ -102,7 +115,7 @@ function SuccessMessage({ type }: { type: 'EXISTING_USER' | 'NEW_USER' }) {
   );
 }
 
-function EmailForm({ product }: { product: Product }) {
+function EmailForm({ product, onBack }: { product: Product; onBack: () => void }) {
   const [email, setEmail] = useState<string>('');
   const [propertyNumber, setPropertyNumber] = useState<number | null>(null);
   const [submitted, setSubmitted] = useState(false);
@@ -170,7 +183,7 @@ function EmailForm({ product }: { product: Product }) {
       {/* Header */}
       <div className='mb-8 text-center'>
         <h2 className='text-3xl font-bold text-neutral-900 mb-2'>
-          Finalisez votre abonnement
+          Votre abonnement EasyStay
         </h2>
         <p className='text-neutral-600'>
           Produit: <span className='font-semibold'>{product.name}</span>
@@ -267,7 +280,7 @@ function EmailForm({ product }: { product: Product }) {
         {/* Back Link */}
         <button
           type='button'
-          onClick={() => window.location.reload()}
+          onClick={onBack}
           className='w-full mt-4 text-sm text-neutral-600 hover:text-neutral-900 font-medium transition'
         >
           ← Retour aux produits
@@ -281,16 +294,16 @@ function SelectProduct({ products, onSelect }: { products: Product[]; onSelect: 
   return (
     <div>
       <div className='text-center'>
-        <h1 className='text-2xl heading text-neutral-600'>
-          Tarifs
+        <h1 className='text-3xl font-bold text-neutral-900 mb-6'>
+          Solution EasyStay
         </h1>
       </div>
       
-      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full'>
+      <div className='flex flex-wrap justify-center gap-6 w-full'>
         {products.map((product) => (
           <div
             key={product.id}
-            className='group flex flex-col h-full bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 overflow-hidden border border-neutral-200'
+            className='group flex flex-col h-full w-full max-w-sm bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow duration-300 overflow-hidden border border-neutral-200'
           >
             {/* Product Image */}
             {product.images && product.images.length > 0 ? (
@@ -350,8 +363,7 @@ function Subscribe() {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [sessionCreated, setSessionCreated] = useState<'EXISTING_USER' | 'NEW_USER' | null>(null);
-  const queryParams = new URLSearchParams(window.location.search);
-  console.log('Query params:', Object.fromEntries(queryParams.entries()));
+
   useEffect(() => {
     async function fetchProducts() {
       try {
@@ -360,7 +372,7 @@ function Subscribe() {
         setProducts(transformStripeData(data));
       } catch (error) {
         console.error('Error fetching products:', error);
-      }    
+      }
     }
     async function handlePostSubscription(session_id: string) {
       try {
@@ -376,18 +388,47 @@ function Subscribe() {
         setSessionCreated(null);
       }
     }
-    const queryParamsObject = Object.fromEntries(queryParams.entries());
-    if (queryParamsObject.session_id) {
-      handlePostSubscription(queryParamsObject.session_id);
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    if (sessionId) {
+      handlePostSubscription(sessionId);
     } else {
       fetchProducts();
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sync URL → state once products are loaded (deep-link entry from /tarifs cards)
+  useEffect(() => {
+    if (!products.length) return;
+    const slug = new URLSearchParams(window.location.search).get('product');
+    const match = findProductBySlug(products, slug);
+    if (match) setSelectedProduct(match);
+  }, [products]);
+
+  // Browser back/forward keeps state aligned with URL
+  useEffect(() => {
+    function onPop() {
+      const slug = new URLSearchParams(window.location.search).get('product');
+      setSelectedProduct(findProductBySlug(products, slug));
+    }
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [products]);
 
   function subscribeToProduct(product: Product) {
     setSelectedProduct(product);
-    console.log('Subscribing to product:', product);
+    const params = new URLSearchParams(window.location.search);
+    params.set('product', slugify(product.name));
+    const qs = params.toString();
+    window.history.pushState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}`);
+  }
+
+  function backToProducts() {
+    setSelectedProduct(null);
+    const params = new URLSearchParams(window.location.search);
+    params.delete('product');
+    const qs = params.toString();
+    window.history.pushState({}, '', `${window.location.pathname}${qs ? '?' + qs : ''}`);
   }
 
   if (sessionCreated) {
@@ -401,7 +442,7 @@ function Subscribe() {
     <div className='flex flex-col items-center gap-12 py-24 px-4 max-w-7xl mx-auto w-full'>
       
       {selectedProduct ? (
-        <EmailForm product={selectedProduct} />
+        <EmailForm product={selectedProduct} onBack={backToProducts} />
       ) : (
         <SelectProduct products={products} onSelect={subscribeToProduct} />
       )}
