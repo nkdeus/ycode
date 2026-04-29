@@ -98,7 +98,8 @@
       "mcp__ycode__update_page_settings",
       "Bash(xargs grep:*)",
       "Bash(xargs head:*)",
-      "mcp__ycode__list_collection_items"
+      "mcp__ycode__list_collection_items",
+      "mcp__ycode__update_collection_item"
     ]
   },
   "enabledMcpjsonServers": [
