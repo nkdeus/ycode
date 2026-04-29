@@ -99,7 +99,9 @@
       "Bash(xargs grep:*)",
       "Bash(xargs head:*)",
       "mcp__ycode__list_collection_items",
-      "mcp__ycode__update_collection_item"
+      "mcp__ycode__update_collection_item",
+      "mcp__ycode__publish",
+      "mcp__ycode__get_unpublished_changes"
     ]
   },
   "enabledMcpjsonServers": [
