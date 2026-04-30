@@ -140,6 +140,18 @@ New pages must follow the homepage hero structure:
 - **Buttons**: use existing `cta` style, not custom gradient backgrounds
 - **Image**: `w-100%, min-h-440, object-contain, rounded-24`
 
+### HTML Embed (`htmlEmbed` layer)
+- **Renders inside an isolated `<iframe>`** — see `LayerRenderer.tsx:671` (`iframeDoc.write(...)`). Scripts inside the embed do **NOT** have access to the page DOM by default.
+- **To target page elements** (e.g. animate `.card-fx`, `#section-id`), access the parent document and window:
+  ```js
+  var doc = window.parent.document;
+  var win = window.parent;
+  var cards = doc.querySelectorAll('.card-fx');
+  ```
+- **Load external libs (GSAP, etc.) into the parent**, not the iframe — create the `<script>` via `doc.createElement('script')` and append to `doc.head`. Reference them via `win.gsap`, `win.ScrollTrigger`.
+- **Wait for hydration** — page layers are React-rendered after `DOMContentLoaded`. Use `requestAnimationFrame` polling on `doc.querySelectorAll(selector)` until elements appear (with a timeout, e.g. 10s).
+- **`<script src>` tags injected via `innerHTML` do not execute** — always use `createElement('script')`.
+
 ### Workflow
 1. **Study the homepage first** — `get_layers` on homepage to understand spacing, colors, and structure patterns
 2. `list_layouts` — pick the closest native layout

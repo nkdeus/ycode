@@ -101,7 +101,22 @@
       "mcp__ycode__list_collection_items",
       "mcp__ycode__update_collection_item",
       "mcp__ycode__publish",
-      "mcp__ycode__get_unpublished_changes"
+      "mcp__ycode__get_unpublished_changes",
+      "Bash(base64 -w 0 \"Alexandre G.jpg\")",
+      "Read(//tmp/**)",
+      "Bash(mkdir *)",
+      "Bash(mkdir -p /tmp/b64)",
+      "Bash(base64 -w 0 \"Photos avis/_resized/Alexandre G.jpg\")",
+      "Bash(base64 -w 0 \"Photos avis/Claire F.jpeg\")",
+      "Bash(base64 -w 0 \"Photos avis/Kevin L.webp\")",
+      "Bash(base64 -w 0 \"Photos avis/_resized/Lauren P.jpg\")",
+      "Bash(cygpath *)",
+      "Bash(mkdir -p \"C:/dev/ycode-fork/ycode/public/_temp_avis\")",
+      "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/_resized/Alexandre G.jpg\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/alexandre.jpg\")",
+      "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/Claire F.jpeg\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/claire.jpeg\")",
+      "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/Kevin L.webp\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/kevin.webp\")",
+      "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/_resized/Lauren P.jpg\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/lauren.jpg\")",
+      "mcp__ycode__get_page"
     ]
   },
   "enabledMcpjsonServers": [
