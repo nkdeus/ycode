@@ -200,19 +200,21 @@ export function CSVImportDialog({
 
   const hasMappedColumns = getMappedFieldIds().size > 0;
 
+  const BATCH_SIZE = 50;
+
   // Start import
   const startImport = async () => {
     setImporting(true);
     setError(null);
 
     try {
-      // Create import job
+      // Create lightweight import job (no CSV data stored in DB)
       const response = await fetch(`/ycode/api/collections/${collectionId}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           columnMapping,
-          csvData: rows,
+          totalRows: rows.length,
         }),
       });
 
@@ -225,7 +227,7 @@ export function CSVImportDialog({
       setImportId(data.data.importId);
       setStep('progress');
 
-      // Start processing and polling
+      // Start processing batches, sending rows directly
       processImport(data.data.importId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start import');
@@ -233,16 +235,23 @@ export function CSVImportDialog({
     }
   };
 
-  // Process import by sequentially triggering batches until complete
+  // Process import by sending batches of CSV rows to the server
   const processImport = async (id: string) => {
     abortRef.current = false;
+    let offset = 0;
 
-    while (!abortRef.current) {
+    while (!abortRef.current && offset < rows.length) {
+      const batch = rows.slice(offset, offset + BATCH_SIZE);
+
       try {
         const response = await fetch('/ycode/api/collections/import/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ importId: id }),
+          body: JSON.stringify({
+            importId: id,
+            rows: batch,
+            startIndex: offset,
+          }),
         });
 
         const data = await response.json();
@@ -253,12 +262,17 @@ export function CSVImportDialog({
 
         setImportStatus(data.data);
 
+        // Yield to the browser so React can paint the progress update
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         if (data.data.status === 'completed' || data.data.status === 'failed' || data.data.isComplete) {
           setImporting(false);
           setStep('complete');
           onImportComplete?.();
           return;
         }
+
+        offset += batch.length;
       } catch (err) {
         console.error('Process error:', err);
         setImporting(false);

@@ -11,7 +11,6 @@ import type { CollectionImport, CollectionImportStatus } from '@/types';
 export interface CreateImportData {
   collection_id: string;
   column_mapping: Record<string, string>;
-  csv_data: Record<string, string>[];
   total_rows: number;
 }
 
@@ -30,7 +29,7 @@ export async function createImport(data: CreateImportData): Promise<CollectionIm
     .insert({
       collection_id: data.collection_id,
       column_mapping: data.column_mapping,
-      csv_data: data.csv_data,
+      csv_data: null,
       total_rows: data.total_rows,
       status: 'pending',
       processed_rows: 0,

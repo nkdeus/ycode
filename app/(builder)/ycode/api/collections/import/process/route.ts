@@ -1,12 +1,11 @@
 import { NextRequest } from 'next/server';
 import {
-  getPendingImports,
   getImportById,
   updateImportStatus,
   updateImportProgress,
   completeImport,
 } from '@/lib/repositories/collectionImportRepository';
-import { createItemsBulk, getMaxIdValue, getMaxManualOrder } from '@/lib/repositories/collectionItemRepository';
+import { createItemsBulk, deleteItem, getMaxIdValue, getMaxManualOrder } from '@/lib/repositories/collectionItemRepository';
 import { insertValuesBulk } from '@/lib/repositories/collectionItemValueRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import {
@@ -82,9 +81,6 @@ async function downloadAndUploadAsset(url: string): Promise<UploadedAsset | null
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const BATCH_SIZE_DEFAULT = 50;
-const BATCH_SIZE_WITH_ASSETS = 10;
 
 interface PreparedValue {
   item_id: string;
@@ -191,68 +187,33 @@ function prepareRow(
 }
 
 /**
- * Fallback: insert rows one by one to pinpoint which row(s) caused the DB error.
- * Only called when the bulk insert fails.
- */
-async function insertRowByRow(
-  preparedRows: PreparedRow[],
-  errors: string[]
-): Promise<{ succeeded: number; failed: number }> {
-  let succeeded = 0;
-  let failed = 0;
-
-  for (const row of preparedRows) {
-    try {
-      await createItemsBulk([row.item]);
-
-      if (row.values.length > 0) {
-        await insertValuesBulk(row.values);
-      }
-
-      succeeded++;
-    } catch (error) {
-      failed++;
-      errors.push(`Row ${row.rowNumber}: DB insert failed — ${getErrorMessage(error)}`);
-    }
-  }
-
-  return { succeeded, failed };
-}
-
-/**
  * POST /ycode/api/collections/import/process
- * Process pending import jobs in batches.
- * Uses bulk INSERT operations to minimize DB round-trips,
- * with row-by-row fallback for precise error identification.
+ * Process a batch of CSV rows for an import job.
+ * The client sends rows directly — no CSV data is stored in the DB.
  *
- * Body (optional):
- *  - importId: string - Process specific import (otherwise processes next pending)
+ * Body:
+ *  - importId: string - The import job to process
+ *  - rows: Record<string, string>[] - The batch of CSV rows to process
+ *  - startIndex: number - The 0-based offset of this batch within the full CSV
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { importId } = body;
+    const { importId, rows: rowsToProcess, startIndex: batchStartIndex } = body;
 
-    let importJob;
+    if (!importId) {
+      return noCache({ error: 'importId is required' }, 400);
+    }
 
-    if (importId) {
-      // Process specific import
-      importJob = await getImportById(importId);
-      if (!importJob) {
-        return noCache(
-          { error: 'Import job not found' },
-          404
-        );
-      }
-    } else {
-      // Get next pending import
-      const pendingImports = await getPendingImports(1);
-      if (pendingImports.length === 0) {
-        return noCache({
-          data: { message: 'No pending imports' }
-        });
-      }
-      importJob = pendingImports[0];
+    if (!Array.isArray(rowsToProcess) || rowsToProcess.length === 0) {
+      return noCache({ error: 'rows array is required and must not be empty' }, 400);
+    }
+
+    const startIndex: number = typeof batchStartIndex === 'number' ? batchStartIndex : 0;
+
+    let importJob = await getImportById(importId);
+    if (!importJob) {
+      return noCache({ error: 'Import job not found' }, 404);
     }
 
     // Skip if already completed or failed
@@ -282,7 +243,6 @@ export async function POST(request: NextRequest) {
         }
       });
     }
-    // Use the fresh data
     importJob = freshImportJob;
 
     // Get collection fields (1 query, reused for all rows)
@@ -304,18 +264,6 @@ export async function POST(request: NextRequest) {
     let currentMaxId = currentMaxIdResult;
     const manualOrderOffset = currentMaxOrderResult + 1;
 
-    // Use smaller batches when asset downloads are needed (slower per row)
-    const mappedFieldIds = new Set(Object.values(importJob.column_mapping).filter(Boolean));
-    const hasAssetFields = fields.some(f =>
-      mappedFieldIds.has(f.id) && (isAssetFieldType(f.type) || f.type === 'rich_text')
-    );
-    const batchSize = hasAssetFields ? BATCH_SIZE_WITH_ASSETS : BATCH_SIZE_DEFAULT;
-
-    // Calculate which rows to process
-    const startIndex = importJob.processed_rows;
-    const endIndex = Math.min(startIndex + batchSize, importJob.total_rows);
-    const rowsToProcess = importJob.csv_data.slice(startIndex, endIndex);
-
     const errors: string[] = [...(importJob.errors || [])];
     let processedCount = importJob.processed_rows;
     let failedCount = importJob.failed_rows;
@@ -332,7 +280,7 @@ export async function POST(request: NextRequest) {
         const { prepared, newMaxId } = prepareRow(
           row, rowNumber, importJob.collection_id,
           importJob.column_mapping, fieldMap, autoFields,
-          currentMaxId, manualOrderOffset + startIndex + i, now, errors
+          currentMaxId, manualOrderOffset + i, now, errors
         );
         currentMaxId = newMaxId;
         preparedRows.push(prepared);
@@ -457,24 +405,21 @@ export async function POST(request: NextRequest) {
     }
 
     if (preparedRows.length > 0) {
-      try {
-        // Bulk insert items with content_hash (1 query)
-        await createItemsBulk(preparedRows.map(r => r.item));
+      await createItemsBulk(preparedRows.map(r => r.item));
 
-        // Bulk insert values (1 query)
-        const allValues = preparedRows.flatMap(r => r.values);
-        if (allValues.length > 0) {
-          await insertValuesBulk(allValues);
+      for (const row of preparedRows) {
+        try {
+          if (row.values.length > 0) {
+            await insertValuesBulk(row.values);
+          }
+          processedCount++;
+        } catch (error) {
+          failedCount++;
+          errors.push(`Row ${row.rowNumber}: DB insert failed — ${getErrorMessage(error)}`);
+          try {
+            await deleteItem(row.itemId);
+          } catch { /* best-effort cleanup */ }
         }
-
-        processedCount += preparedRows.length;
-      } catch (bulkError) {
-        // Bulk failed — fall back to row-by-row to identify the culprit(s)
-        console.error('Bulk insert failed, falling back to row-by-row:', bulkError);
-
-        const { succeeded, failed } = await insertRowByRow(preparedRows, errors);
-        processedCount += succeeded;
-        failedCount += failed;
       }
     }
 

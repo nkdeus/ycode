@@ -1092,7 +1092,7 @@ export interface CollectionImport {
   processed_rows: number;
   failed_rows: number;
   column_mapping: Record<string, string>; // csvColumn -> fieldId
-  csv_data: Record<string, string>[]; // Array of row objects
+  csv_data: Record<string, string>[] | null; // Deprecated — kept for migration compat
   errors: string[] | null;
   created_at: string;
   updated_at: string;

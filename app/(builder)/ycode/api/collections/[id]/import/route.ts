@@ -10,11 +10,12 @@ export const revalidate = 0;
 
 /**
  * POST /ycode/api/collections/[id]/import
- * Create a new CSV import job for a collection
+ * Create a new CSV import job for a collection.
+ * CSV data is NOT stored — it's sent per-batch to the process endpoint.
  *
  * Body:
  *  - columnMapping: Record<string, string> - Maps CSV column names to field IDs
- *  - csvData: Record<string, string>[] - Parsed CSV rows
+ *  - totalRows: number - Total number of rows to import
  */
 export async function POST(
   request: NextRequest,
@@ -33,7 +34,7 @@ export async function POST(
     }
 
     const body = await request.json();
-    const { columnMapping, csvData } = body;
+    const { columnMapping, totalRows } = body;
 
     // Validate required fields
     if (!columnMapping || typeof columnMapping !== 'object') {
@@ -43,19 +44,18 @@ export async function POST(
       );
     }
 
-    if (!csvData || !Array.isArray(csvData) || csvData.length === 0) {
+    if (!totalRows || typeof totalRows !== 'number' || totalRows <= 0) {
       return noCache(
-        { error: 'CSV data is required and must not be empty' },
+        { error: 'totalRows is required and must be a positive number' },
         400
       );
     }
 
-    // Create import job
+    // Create lightweight import job (CSV data is sent per-batch to the process endpoint)
     const importJob = await createImport({
       collection_id: id,
       column_mapping: columnMapping,
-      csv_data: csvData,
-      total_rows: csvData.length,
+      total_rows: totalRows,
     });
 
     return noCache(
