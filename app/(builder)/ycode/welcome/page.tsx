@@ -271,7 +271,7 @@ export default function WelcomePage() {
 
           <div className="flex-1 flex flex-col items-center justify-center py-10">
 
-            <div className="grid grid-cols-3 gap-4 w-full max-w-xl">
+            <div className="grid grid-cols-4 gap-4 w-full max-w-xl">
 
               <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
                 <Label variant="muted">Step 1</Label>
@@ -286,6 +286,11 @@ export default function WelcomePage() {
               <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
                 <Label variant="muted">Step 3</Label>
                 <Label size="sm">Create account</Label>
+              </div>
+
+              <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
+                <Label variant="muted">Step 4</Label>
+                <Label size="sm">Choose template</Label>
               </div>
 
             </div>
@@ -484,7 +489,7 @@ export default function WelcomePage() {
 
           <div className="flex-1 flex flex-col items-center justify-center py-6">
 
-            <div className="grid grid-cols-3 gap-4 w-full max-w-xl">
+            <div className="grid grid-cols-4 gap-4 w-full max-w-xl">
 
               <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
                 <Label variant="muted">Step 1</Label>
@@ -499,6 +504,11 @@ export default function WelcomePage() {
               <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
                 <Label variant="muted">Step 3</Label>
                 <Label size="sm">Create account</Label>
+              </div>
+
+              <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
+                <Label variant="muted">Step 4</Label>
+                <Label size="sm">Choose template</Label>
               </div>
 
             </div>
@@ -642,7 +652,7 @@ export default function WelcomePage() {
 
         <div className="flex-1 flex flex-col items-center justify-center py-10">
 
-          <div className="grid grid-cols-3 gap-4 w-full max-w-xl">
+          <div className="grid grid-cols-4 gap-4 w-full max-w-xl">
 
             <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
               <Label variant="muted">Step 1</Label>
@@ -657,6 +667,11 @@ export default function WelcomePage() {
             <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
               <Label variant="muted">Step 3</Label>
               <Label size="sm">Create account</Label>
+            </div>
+
+            <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
+              <Label variant="muted">Step 4</Label>
+              <Label size="sm">Choose template</Label>
             </div>
 
           </div>
@@ -793,7 +808,7 @@ export default function WelcomePage() {
 
         <div className="flex-1 flex flex-col items-center justify-center py-10">
 
-        <div className="grid grid-cols-3 gap-4 w-full max-w-xl">
+        <div className="grid grid-cols-4 gap-4 w-full max-w-xl">
 
           <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
             <Label variant="muted">Step 1</Label>
@@ -808,6 +823,11 @@ export default function WelcomePage() {
           <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
             <Label variant="muted">Step 3</Label>
             <Label size="sm">Create account</Label>
+          </div>
+
+          <div className="border-t-2 border-white/50 py-4 flex flex-col gap-0.5 opacity-50">
+            <Label variant="muted">Step 4</Label>
+            <Label size="sm">Choose template</Label>
           </div>
 
         </div>
@@ -932,26 +952,40 @@ export default function WelcomePage() {
     );
   }
 
-  // Step 5: Choose a Template or Start from Scratch
+  // Step 4: Choose a Template or Start from Scratch
   if (currentStep === 'template') {
     return (
       <div className="min-h-screen flex flex-col bg-neutral-950">
 
         <LogoBottomRight />
 
-        <div className="flex-1 flex flex-col items-center justify-center py-10">
+        <div className="flex-1 flex flex-col items-center py-10">
 
-          <div className="w-full max-w-4xl animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
+          <div className="grid grid-cols-4 gap-4 w-full max-w-xl">
 
-            <div className="flex flex-col items-center text-center gap-1 mb-10">
-              <Label size="sm">Choose a template</Label>
-              <Label
-                variant="muted"
-                size="sm"
-              >
-                Pick a pre-built design or start with a blank canvas.
-              </Label>
+            <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
+              <Label variant="muted">Step 1</Label>
+              <Label size="sm">Connect Supabase</Label>
             </div>
+
+            <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
+              <Label variant="muted">Step 2</Label>
+              <Label size="sm">Run migrations</Label>
+            </div>
+
+            <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
+              <Label variant="muted">Step 3</Label>
+              <Label size="sm">Create account</Label>
+            </div>
+
+            <div className="border-t-2 border-white py-4 flex flex-col gap-0.5">
+              <Label variant="muted">Step 4</Label>
+              <Label size="sm">Choose template</Label>
+            </div>
+
+          </div>
+
+          <div className="w-full max-w-xl py-10 animate-in fade-in slide-in-from-bottom-1 duration-700" style={{ animationFillMode: 'both' }}>
 
             <TemplateGallery
               startFromScratchHref="/ycode"

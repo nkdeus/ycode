@@ -208,7 +208,7 @@ export function TemplateGallery({
       )}
 
       {/* Category Filter Dropdown */}
-      {categories.length > 0 && (
+      {/* {categories.length > 0 && (
         <div className="mb-6">
           <Select value={selectedCategory} onValueChange={setSelectedCategory}>
             <SelectTrigger className="w-[200px]">
@@ -224,7 +224,7 @@ export function TemplateGallery({
             </SelectContent>
           </Select>
         </div>
-      )}
+      )} */}
 
       {/* Template Grid */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
