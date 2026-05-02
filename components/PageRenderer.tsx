@@ -385,14 +385,39 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts via <link> elements */}
+      {/* Load Google Fonts via <link> elements (non-blocking + preconnect to avoid blocking FCP) */}
+      {googleFontLinkUrls.length > 0 && (
+        <>
+          <link
+            rel="preconnect"
+            href="https://fonts.googleapis.com"
+          />
+          <link
+            rel="preconnect"
+            href="https://fonts.gstatic.com"
+            crossOrigin="anonymous"
+          />
+        </>
+      )}
       {googleFontLinkUrls.map((url, i) => (
         <link
           key={`gfont-${i}`}
-          rel="stylesheet"
+          rel="preload"
+          as="style"
           href={url}
+           
+          onLoad={"this.onload=null;this.rel='stylesheet'" as unknown as React.ReactEventHandler<HTMLLinkElement>}
         />
       ))}
+      <noscript>
+        {googleFontLinkUrls.map((url, i) => (
+          <link
+            key={`gfont-ns-${i}`}
+            rel="stylesheet"
+            href={url}
+          />
+        ))}
+      </noscript>
 
       {/* Inject custom font @font-face rules and font class CSS */}
       {fontsCss && (
