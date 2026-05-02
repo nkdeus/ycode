@@ -73,9 +73,91 @@ Pour que les soumissions de formulaire soient envoyées par email :
 
 Si le client n'a pas de compte Google ou veut un SMTP dédié aux transactionnels (meilleure délivrabilité) :
 
-- **Resend** — simple, API key directe
+- **Resend** — simple, API key directe (voir section dédiée ci-dessous)
 - **Postmark** — excellent pour transactionnel
 - **SendGrid** — historique, généreux en free tier
 - **MailerSend** — alternative moderne
 
-Tous ces providers ont un preset dans Ycode (**Settings → Email**).
+La plupart de ces providers ont un preset dans Ycode (**Settings → Email**). Resend n'a pas de preset → utiliser **Other**.
+
+---
+
+# Configuration SMTP Ycode (Resend)
+
+Resend est une alternative moderne à Gmail, pensée pour le transactionnel (meilleure délivrabilité, dashboard d'analytics, pas besoin de 2FA / App Password).
+
+## Étape 1 — Créer un compte Resend
+
+1. S'inscrire sur https://resend.com
+2. Le free tier permet 3 000 emails/mois et 100/jour — largement suffisant pour la plupart des sites Ycode
+
+## Étape 2 — Vérifier un domaine
+
+Resend **ne permet pas** d'envoyer depuis une adresse Gmail/Outlook personnelle. Il faut un domaine que tu possèdes.
+
+1. Dashboard Resend → **Domains** → **Add Domain**
+2. Saisir le domaine (ex : `easystay.com`)
+3. Resend affiche des enregistrements DNS à ajouter chez le registrar (SPF, DKIM, MX optionnel pour DMARC)
+4. Attendre la propagation DNS (quelques minutes à quelques heures)
+5. Cliquer **Verify** → statut `Verified` ✅
+
+Tant que le domaine n'est pas vérifié, seul `onboarding@resend.dev` est autorisé pour les tests.
+
+## Étape 3 — Récupérer / créer l'API Key
+
+1. Dashboard Resend → **API Keys** → **Create API Key**
+2. Permissions : **Sending access** (suffisant pour SMTP)
+3. Copier la clé (format `re_xxxxxxxx`) — affichée une seule fois
+
+**API Key actuelle (EasyStay)** :
+
+```
+re_NtMyjXap_8UF7ht6oF3YmRGt7fBcuBELH
+```
+
+> ⚠️ Ce fichier est dans `.gitignore` — ne pas le commit. Si la clé fuite, la révoquer dans le dashboard Resend et en générer une nouvelle.
+
+## Étape 4 — Configurer dans Ycode
+
+1. Dans l'éditeur Ycode → **Settings → Email**
+2. Sélectionner le preset **Other** (Resend n'a pas de preset dédié)
+3. Remplir :
+
+| Champ      | Valeur                                                   |
+| ---------- | -------------------------------------------------------- |
+| Host       | `smtp.resend.com`                                        |
+| Port       | `587`                                                    |
+| Username   | `resend` (littéralement le mot "resend", **pas l'email**) |
+| Password   | API Key Resend (`re_...`)                                |
+| From name  | Nom affiché à l'expéditeur (ex : `EasyStay`)             |
+| From email | Adresse sur le **domaine vérifié** (ex : `noreply@easystay.com`) |
+
+4. Cliquer **Save**
+5. Cliquer **Send test email** → vérifier la réception
+6. Si succès : **"Connection successful!"** ✅
+
+## Étape 5 — Lier le SMTP aux formulaires
+
+Identique à Gmail :
+
+1. Dans l'éditeur, sélectionner le **form**
+2. Settings → **"Email to"** (destinataire)
+3. Publier la page
+4. Tester une soumission réelle
+
+## Troubleshooting Resend
+
+| Erreur                              | Cause                                            | Solution                                            |
+| ----------------------------------- | ------------------------------------------------ | --------------------------------------------------- |
+| `Invalid login` / auth refusé       | Username ≠ `resend` ou clé API mal copiée        | Username = `resend`, recoller la clé sans espaces   |
+| `From address not verified`         | `From email` n'est pas sur un domaine vérifié    | Vérifier le domaine ou utiliser `onboarding@resend.dev` |
+| Test OK mais aucun mail reçu        | Domaine vérifié mais SPF/DKIM pas encore propagés | Attendre + vérifier dans Resend → **Logs**         |
+| `403 Forbidden`                     | Clé API révoquée ou permissions insuffisantes    | Régénérer une clé avec `Sending access`             |
+
+## Avantages Resend vs Gmail
+
+- Pas de 2FA ni App Password à gérer
+- Logs détaillés (ouvertures, bounces, etc.) dans le dashboard
+- Délivrabilité supérieure (IP dédiées au transactionnel)
+- Quota plus large (3k/mois free vs limites Gmail anti-spam)
+- Limite Gmail : ~500 envois/jour, risque de blocage si formulaire spammé

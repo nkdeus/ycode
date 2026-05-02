@@ -116,7 +116,8 @@
       "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/Claire F.jpeg\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/claire.jpeg\")",
       "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/Kevin L.webp\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/kevin.webp\")",
       "Bash(cp \"C:/dev/ycode-fork/ycode/Photos avis/_resized/Lauren P.jpg\" \"C:/dev/ycode-fork/ycode/public/_temp_avis/lauren.jpg\")",
-      "mcp__ycode__get_page"
+      "mcp__ycode__get_page",
+      "Bash(npm i *)"
     ]
   },
   "enabledMcpjsonServers": [
