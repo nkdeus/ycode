@@ -385,7 +385,7 @@ export default async function PageRenderer({
         />
       )}
 
-      {/* Load Google Fonts via <link> elements (non-blocking + preconnect to avoid blocking FCP) */}
+      {/* Load Google Fonts non-blocking (preconnect + preload + media-print swap trick) */}
       {googleFontLinkUrls.length > 0 && (
         <>
           <link
@@ -397,27 +397,32 @@ export default async function PageRenderer({
             href="https://fonts.gstatic.com"
             crossOrigin="anonymous"
           />
+          {googleFontLinkUrls.map((url, i) => (
+            <link
+              key={`gfont-preload-${i}`}
+              rel="preload"
+              as="style"
+              href={url}
+            />
+          ))}
+          <script
+            dangerouslySetInnerHTML={{
+              __html: googleFontLinkUrls
+                .map(url => `(function(){var l=document.createElement('link');l.rel='stylesheet';l.href=${JSON.stringify(url)};l.media='print';l.onload=function(){this.media='all';this.onload=null};document.head.appendChild(l)})();`)
+                .join(''),
+            }}
+          />
+          <noscript>
+            {googleFontLinkUrls.map((url, i) => (
+              <link
+                key={`gfont-ns-${i}`}
+                rel="stylesheet"
+                href={url}
+              />
+            ))}
+          </noscript>
         </>
       )}
-      {googleFontLinkUrls.map((url, i) => (
-        <link
-          key={`gfont-${i}`}
-          rel="preload"
-          as="style"
-          href={url}
-           
-          onLoad={"this.onload=null;this.rel='stylesheet'" as unknown as React.ReactEventHandler<HTMLLinkElement>}
-        />
-      ))}
-      <noscript>
-        {googleFontLinkUrls.map((url, i) => (
-          <link
-            key={`gfont-ns-${i}`}
-            rel="stylesheet"
-            href={url}
-          />
-        ))}
-      </noscript>
 
       {/* Inject custom font @font-face rules and font class CSS */}
       {fontsCss && (
