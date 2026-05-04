@@ -34,10 +34,19 @@ interface UploadedAsset {
   publicUrl: string;
 }
 
+/** Encode a URL that may contain unencoded characters like spaces. */
+function sanitizeUrl(url: string): string {
+  try {
+    return new URL(url).href;
+  } catch {
+    return encodeURI(url);
+  }
+}
+
 /** Extract a decoded filename from a URL, or empty string if none found. */
 function extractFilenameFromUrl(url: string): string {
   try {
-    const segment = new URL(url).pathname.split('/').pop();
+    const segment = new URL(sanitizeUrl(url)).pathname.split('/').pop();
     if (segment && segment.includes('.')) {
       return decodeURIComponent(segment);
     }
@@ -48,7 +57,7 @@ function extractFilenameFromUrl(url: string): string {
 /** Download a file from a URL and upload it to the asset manager. */
 async function downloadAndUploadAsset(url: string): Promise<UploadedAsset | null> {
   try {
-    const response = await fetch(url, {
+    const response = await fetch(sanitizeUrl(url), {
       headers: { 'User-Agent': 'Ycode-CSV-Import/1.0' },
     });
 
