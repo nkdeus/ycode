@@ -10,7 +10,6 @@ import { insertValuesBulk, insertValuesDirectPg } from '@/lib/repositories/colle
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import {
   convertValueForFieldType,
-  parseCSVText,
   SKIP_COLUMN,
   AUTO_FIELD_KEYS,
   truncateValue,
@@ -198,44 +197,35 @@ function prepareRow(
   };
 }
 
-/** Process 1 row at a time from storage to keep peak memory low. */
-const STORAGE_BATCH_SIZE = 1;
-
 /**
- * Fallback: download and parse the CSV from Supabase Storage.
- * Used for oversized rows that can't fit in the request body.
- * Extracts only the needed slice and dereferences the full CSV
- * so GC can reclaim it before the heavy processing phase.
+ * Load a batch of rows from a JSON file in Supabase Storage.
+ * Used when rows are too large for the request body — the client uploads
+ * each batch as a small JSON file instead of sending the full CSV.
  */
-async function loadRowsFromStorage(
-  csvMeta: { storage_path?: string } | null,
-  startIndex: number,
+async function loadBatchFromStorage(
+  batchPath: string,
 ): Promise<{ rows: Record<string, string>[]; supabase: Awaited<ReturnType<typeof getSupabaseAdmin>> }> {
-  if (!csvMeta?.storage_path) {
-    throw new Error('Import job has no CSV file reference');
-  }
-
   const supabase = await getSupabaseAdmin();
   if (!supabase) {
     throw new Error('Storage not configured');
   }
 
-  let rows: Record<string, string>[];
-  {
-    const { data: fileBlob, error: downloadError } = await supabase.storage
-      .from(STORAGE_BUCKET)
-      .download(csvMeta.storage_path);
+  const { data: fileBlob, error: downloadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .download(batchPath);
 
-    if (downloadError || !fileBlob) {
-      console.error('Failed to download CSV from storage:', downloadError);
-      throw new Error('Failed to read CSV file from storage');
-    }
-
-    const csvText = await fileBlob.text();
-    const parsed = parseCSVText(csvText);
-    rows = parsed.rows.slice(startIndex, startIndex + STORAGE_BATCH_SIZE);
+  if (downloadError || !fileBlob) {
+    console.error('Failed to download batch from storage:', downloadError);
+    throw new Error('Failed to read batch file from storage');
   }
-  // fileBlob, csvText, parsed all out of scope — eligible for GC
+
+  const text = await fileBlob.text();
+  console.warn(`[csv-import] Downloaded batch from storage: ${(text.length / 1024).toFixed(0)}KB`);
+  const rows = JSON.parse(text) as Record<string, string>[];
+
+  try {
+    await supabase.storage.from(STORAGE_BUCKET).remove([batchPath]);
+  } catch { /* best-effort cleanup */ }
 
   return { rows, supabase };
 }
@@ -244,19 +234,22 @@ async function loadRowsFromStorage(
  * POST /ycode/api/collections/import/process
  * Process the next batch of rows for an import job.
  *
- * The client can provide rows directly (preferred — avoids re-downloading the CSV)
- * or omit them to fall back to reading from Supabase Storage.
+ * Row delivery methods (in order of preference):
+ *  1. rows[] in body — for batches that fit under Vercel's 4.5MB body limit
+ *  2. batchStoragePath in body — client uploaded the batch as a JSON file to storage
  *
  * Body:
  *  - importId: string - The import job to process
- *  - rows?: Record<string, string>[] - Optional batch of CSV rows to process
+ *  - rows?: Record<string, string>[] - Batch of CSV rows (small batches)
+ *  - batchStoragePath?: string - Path to a batch JSON file in storage (large rows)
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
-    const { importId, rows: clientRows } = body as {
+    const { importId, rows: clientRows, batchStoragePath } = body as {
       importId?: string;
       rows?: Record<string, string>[];
+      batchStoragePath?: string;
     };
 
     if (!importId) {
@@ -300,17 +293,22 @@ export async function POST(request: NextRequest) {
     const startIndex = importJob.processed_rows + importJob.failed_rows;
     const csvMeta = importJob.csv_data as { storage_path?: string } | null;
 
+    // Resolve rows: body → batch file in storage
     let rowsToProcess: Record<string, string>[];
     let supabaseForCleanup: Awaited<ReturnType<typeof getSupabaseAdmin>> = null;
     let isStorageFallback = false;
 
     if (clientRows && Array.isArray(clientRows) && clientRows.length > 0) {
       rowsToProcess = clientRows;
-    } else {
-      const storageResult = await loadRowsFromStorage(csvMeta, startIndex);
+      console.warn(`[csv-import] Client body: ${clientRows.length} rows, startIndex=${startIndex}`);
+    } else if (batchStoragePath) {
+      console.warn(`[csv-import] Batch from storage: ${batchStoragePath}, startIndex=${startIndex}`);
+      const storageResult = await loadBatchFromStorage(batchStoragePath);
       rowsToProcess = storageResult.rows;
       supabaseForCleanup = storageResult.supabase;
       isStorageFallback = true;
+    } else {
+      rowsToProcess = [];
     }
 
     if (rowsToProcess.length === 0) {
@@ -397,13 +395,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Merge all unique URLs from both asset fields and rich-text images
     const allUniqueUrls = new Set([
       ...allPendingAssets.map(a => a.asset.url),
       ...richTextImageUrls,
     ]);
 
     if (allUniqueUrls.size > 0) {
+      console.warn(`[csv-import] Processing ${allUniqueUrls.size} unique asset URLs`);
+
       const urlToFilename = new Map<string, string>();
       const filenamesToCheck: string[] = [];
       for (const url of allUniqueUrls) {
@@ -445,7 +444,6 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 4) Assign asset IDs back to asset field values
       for (const { row, asset } of allPendingAssets) {
         const uploaded = urlToUploadedAsset.get(asset.url);
         if (uploaded) {
@@ -457,7 +455,6 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 5) Replace image URLs in rich-text field values
       if (richTextImageUrls.size > 0) {
         const rtUrlToAsset = new Map<string, { assetId: string; publicUrl: string }>();
         for (const url of richTextImageUrls) {

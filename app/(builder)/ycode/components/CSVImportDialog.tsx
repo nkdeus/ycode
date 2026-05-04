@@ -273,7 +273,6 @@ export function CSVImportDialog({
     }
   };
 
-  // Vercel serverless body limit is 4.5MB; stay well under it.
   const MAX_BODY_BYTES = 3_500_000;
   const MAX_BATCH_SIZE = 15;
 
@@ -305,9 +304,47 @@ export function CSVImportDialog({
   };
 
   /**
+   * Upload a batch of rows as a JSON file to storage via presigned URL.
+   * Used when rows are too large for Vercel's request body limit.
+   */
+  const uploadBatchToStorage = async (batch: Record<string, string>[]): Promise<string> => {
+    const json = JSON.stringify(batch);
+    const blob = new Blob([json], { type: 'application/json' });
+
+    const presignRes = await fetch('/ycode/api/files/presign', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: `batch-${Date.now()}.json`,
+        mimeType: 'application/json',
+        fileSize: blob.size,
+      }),
+    });
+
+    if (!presignRes.ok) {
+      const err = await presignRes.json();
+      throw new Error(err.error || 'Failed to get batch upload URL');
+    }
+
+    const { data: presignData } = await presignRes.json();
+
+    const uploadRes = await fetch(presignData.signedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: blob,
+    });
+
+    if (!uploadRes.ok) {
+      throw new Error('Failed to upload batch to storage');
+    }
+
+    return presignData.storagePath;
+  };
+
+  /**
    * Send row batches from local state to the server for processing.
-   * Oversized rows that can't fit in the body are skipped so the server
-   * can process them from the uploaded CSV in storage.
+   * Small batches go directly in the body; oversized rows are uploaded
+   * to storage so the server downloads only that batch file (not the full CSV).
    */
   const processImport = async (id: string) => {
     abortRef.current = false;
@@ -316,55 +353,22 @@ export function CSVImportDialog({
     while (!abortRef.current && currentIndex < rows.length) {
       const batch = buildBatch(currentIndex);
 
-      if (batch.length === 0) {
-        // Single row exceeds body limit — server processes it from storage
-        let advanced = false;
-        try {
-          const response = await fetch('/ycode/api/collections/import/process', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ importId: id }),
-          });
-          if (response.ok) {
-            const data = await response.json();
-            setImportStatus(data.data);
-            const serverProcessed = (data.data.processedRows ?? 0) + (data.data.failedRows ?? 0);
-            if (serverProcessed > currentIndex) {
-              currentIndex = serverProcessed;
-              advanced = true;
-            }
-            if (data.data.isComplete) {
-              setImporting(false);
-              setStep('complete');
-              onImportComplete?.();
-              return;
-            }
-          }
-        } catch {
-          // Server crashed (e.g. OOM) — re-sync with actual server progress
-          // to avoid re-inserting rows that committed before the crash
-          try {
-            const statusRes = await fetch(`/ycode/api/collections/import/${id}/status`);
-            if (statusRes.ok) {
-              const statusData = await statusRes.json();
-              const serverProcessed = (statusData.data?.processedRows ?? 0) + (statusData.data?.failedRows ?? 0);
-              if (serverProcessed > currentIndex) {
-                currentIndex = serverProcessed;
-                advanced = true;
-              }
-            }
-          } catch { /* unable to re-sync */ }
-        }
-        if (!advanced) currentIndex++;
-        await new Promise(resolve => setTimeout(resolve, 0));
-        continue;
-      }
-
       try {
+        let requestBody: Record<string, unknown>;
+
+        if (batch.length > 0) {
+          requestBody = { importId: id, rows: batch };
+        } else {
+          // Row is too large for the body — upload just this single row to storage
+          const oversizedRow = stripSkippedColumns(rows[currentIndex]);
+          const batchStoragePath = await uploadBatchToStorage([oversizedRow]);
+          requestBody = { importId: id, batchStoragePath };
+        }
+
         const response = await fetch('/ycode/api/collections/import/process', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ importId: id, rows: batch }),
+          body: JSON.stringify(requestBody),
         });
 
         if (response.ok) {
@@ -383,14 +387,14 @@ export function CSVImportDialog({
         } else {
           // Server returned an error (e.g. 500/OOM) — skip this batch and continue
           console.error(`Process request failed with status ${response.status}`);
-          currentIndex += batch.length;
+          currentIndex += batch.length || 1;
         }
 
         await new Promise(resolve => setTimeout(resolve, 0));
       } catch (err) {
         // Network error or server crash — skip batch and continue
         console.error('Process error:', err);
-        currentIndex += batch.length;
+        currentIndex += batch.length || 1;
       }
     }
 
