@@ -275,7 +275,7 @@ export function CSVImportDialog({
 
   // Vercel serverless body limit is 4.5MB; stay well under it.
   const MAX_BODY_BYTES = 3_500_000;
-  const MAX_BATCH_SIZE = 20;
+  const MAX_BATCH_SIZE = 10;
 
   /** Build the next batch of rows that fits within the body size limit. */
   const buildBatch = (startIndex: number): Record<string, string>[] => {
