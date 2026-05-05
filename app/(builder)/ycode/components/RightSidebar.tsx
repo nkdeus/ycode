@@ -81,6 +81,10 @@ import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useCanvasTextEditorStore } from '@/stores/useCanvasTextEditorStore';
 import { useEditorActions, useEditorUrl } from '@/hooks/use-editor-url';
+import { useLocalizationMode } from '@/hooks/use-localization-mode';
+import SidebarTranslationRow from './SidebarTranslationRow';
+import { extractLayerTranslatableItemsShallow } from '@/lib/localisation-utils';
+import { useLocalisationStore } from '@/stores/useLocalisationStore';
 
 // 5.5 Hooks
 import { useLayerLocks } from '@/hooks/use-layer-locks';
@@ -136,6 +140,25 @@ const RightSidebar = React.memo(function RightSidebar({
 }: RightSidebarProps) {
   const { openComponent, urlState, updateQueryParams } = useEditorActions();
   const { routeType } = useEditorUrl();
+  const { isLocalizing, currentLocale, defaultLocale } = useLocalizationMode();
+
+  // Translation editor state + store actions used by the per-layer Translate
+  // panel rendered inside the Settings tab when a non-default locale is active.
+  const selectedLocaleId = useLocalisationStore((state) => state.selectedLocaleId);
+  const getTranslationByKey = useLocalisationStore((state) => state.getTranslationByKey);
+  const createTranslation = useLocalisationStore((state) => state.createTranslation);
+  const updateTranslation = useLocalisationStore((state) => state.updateTranslation);
+  const [translationLocalInputValues, setTranslationLocalInputValues] = useState<Record<string, string>>({});
+  const handleTranslationLocalValueChange = useCallback((key: string, value: string) => {
+    setTranslationLocalInputValues((prev) => ({ ...prev, [key]: value }));
+  }, []);
+  const handleTranslationLocalValueClear = useCallback((key: string) => {
+    setTranslationLocalInputValues((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   // Local state for immediate UI feedback
   const [activeTab, setActiveTab] = useState<'design' | 'settings' | 'interactions' | undefined>(
@@ -255,6 +278,31 @@ const RightSidebar = React.memo(function RightSidebar({
 
   const selectedLayerRef = useRef(selectedLayer);
   selectedLayerRef.current = selectedLayer;
+
+  // Translatable items for the selected layer, computed only when actually
+  // localizing. The source resolution mirrors the server: layers inside a
+  // component are scoped to that component (via _masterComponentId on the
+  // server / editingComponentId here) so a single translation propagates to
+  // all instances of the component on the site.
+  const translationSource = useMemo(() => {
+    if (!selectedLayer || !isLocalizing) return null;
+    if (editingComponentId) {
+      return { sourceType: 'component' as const, sourceId: editingComponentId };
+    }
+    if (currentPageId) {
+      return { sourceType: 'page' as const, sourceId: currentPageId };
+    }
+    return null;
+  }, [selectedLayer, isLocalizing, editingComponentId, currentPageId]);
+
+  const translatableItemsForSelectedLayer = useMemo(() => {
+    if (!selectedLayer || !translationSource) return [];
+    return extractLayerTranslatableItemsShallow(
+      selectedLayer,
+      translationSource.sourceType,
+      translationSource.sourceId,
+    );
+  }, [selectedLayer, translationSource]);
 
   const hasCustomAttributes = !!(selectedLayer?.settings?.customAttributes &&
     Object.keys(selectedLayer.settings.customAttributes).length > 0);
@@ -1781,19 +1829,32 @@ const RightSidebar = React.memo(function RightSidebar({
 
   return (
     <div className="w-64 shrink-0 bg-background border-l flex flex-col p-4 pb-0 h-full overflow-hidden">
-      {/* Tabs */}
+      {/* Tabs.
+          When the user is translating (non-default locale active) we hide
+          the Design + Interactions tabs entirely and force the Settings tab,
+          which is where the per-layer Translate panel renders. */}
       <Tabs
-        value={activeTab}
-        onValueChange={handleTabChange}
+        value={isLocalizing ? 'settings' : activeTab}
+        onValueChange={isLocalizing ? () => {} : handleTabChange}
         className="flex flex-col flex-1 min-h-0 gap-0"
       >
-        <div className="">
-          <TabsList className="w-full">
-            <TabsTrigger value="design">Design</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="interactions">Interactions</TabsTrigger>
-          </TabsList>
-        </div>
+        {!isLocalizing && (
+          <div className="">
+            <TabsList className="w-full">
+              <TabsTrigger value="design">Design</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
+              <TabsTrigger value="interactions">Interactions</TabsTrigger>
+            </TabsList>
+          </div>
+        )}
+        {isLocalizing && currentLocale && (
+          <div className="flex items-center gap-2 px-1 pb-2">
+            <Icon name="globe" className="size-3 opacity-60" />
+            <span className="text-xs font-medium">
+              Translating to {currentLocale.label}
+            </span>
+          </div>
+        )}
 
         <hr className="mt-4" />
 
@@ -1976,7 +2037,43 @@ const RightSidebar = React.memo(function RightSidebar({
 
         <TabsContent value="settings" className="flex-1 overflow-y-auto no-scrollbar mt-0 data-[state=inactive]:hidden">
           <div className="flex flex-col divide-y">
-            {selectedLayerId !== 'body' && (<>
+            {/* Translate panel — replaces all design/settings controls when a
+                non-default locale is active. Stacked Framer-style layout: one
+                source + translation Textarea pair per translatable property of
+                the selected layer. */}
+            {isLocalizing && selectedLayer && currentLocale && (
+              <div className="flex flex-col gap-6 py-5">
+                {translatableItemsForSelectedLayer.length === 0 ? (
+                  <Empty>
+                    <EmptyMedia variant="icon">
+                      <Icon name="globe" />
+                    </EmptyMedia>
+                    <EmptyTitle>Nothing to translate</EmptyTitle>
+                    <EmptyDescription>
+                      This layer has no translatable content. Select a text or media element.
+                    </EmptyDescription>
+                  </Empty>
+                ) : (
+                  translatableItemsForSelectedLayer.map((item) => (
+                    <SidebarTranslationRow
+                      key={item.key}
+                      item={item}
+                      selectedLocaleId={selectedLocaleId}
+                      defaultLocaleLabel={defaultLocale?.label || 'Default'}
+                      currentLocaleLabel={currentLocale.label}
+                      localInputValues={translationLocalInputValues}
+                      onLocalValueChange={handleTranslationLocalValueChange}
+                      onLocalValueClear={handleTranslationLocalValueClear}
+                      getTranslationByKey={getTranslationByKey}
+                      createTranslation={createTranslation}
+                      updateTranslation={updateTranslation}
+                    />
+                  ))
+                )}
+              </div>
+            )}
+
+            {!isLocalizing && selectedLayerId !== 'body' && (<>
             {/* Attributes */}
             <div className="flex flex-col gap-2 pb-5 pt-5">
               <div className="grid grid-cols-3">
@@ -2754,7 +2851,8 @@ const RightSidebar = React.memo(function RightSidebar({
             />
             </>)}
 
-            {/* Custom Attributes Panel */}
+            {/* Custom Attributes Panel — hide while translating */}
+            {!isLocalizing && (
             <SettingsPanel
               title="Custom attributes"
               isOpen={hasCustomAttributes}
@@ -2838,6 +2936,7 @@ const RightSidebar = React.memo(function RightSidebar({
                 </div>
               )}
             </SettingsPanel>
+            )}
           </div>
         </TabsContent>
 

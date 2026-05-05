@@ -85,7 +85,7 @@ export default function HeaderBar({
   const { currentPageCollectionItemId, currentPageId: storeCurrentPageId, isPreviewMode, setPreviewMode, openFileManager, setKeyboardShortcutsOpen, setActiveSidebarTab, lastDesignUrl, setLastDesignUrl, previewReturnUrl, previewReturnTab, setPreviewReturn } = useEditorStore();
   const { folders, pages: storePages } = usePagesStore();
   const { items, fields, collections, selectedCollectionId: storeSelectedCollectionId, setSelectedCollectionId } = useCollectionsStore();
-  const { locales, selectedLocaleId, setSelectedLocaleId, translations } = useLocalisationStore();
+  const { locales, selectedLocaleId, setSelectedLocaleId, translations, loadTranslations } = useLocalisationStore();
   const { navigateToLayers, navigateToCollection, navigateToCollections, updateQueryParams, routeType } = useEditorUrl();
 
   // Optimistic nav button state - set immediately on click, cleared when URL catches up
@@ -492,6 +492,14 @@ export default function HeaderBar({
       </div>
 
       <div className="flex gap-1.5 items-center justify-center">
+        {/* Subtle 'Translating' badge so the user always knows the canvas is
+            in read-only translation mode (canvas mutations are disabled,
+            sidebar shows the per-layer Translate panel instead of Design). */}
+        {selectedLocale && !selectedLocale.is_default && (
+          <Badge variant="secondary" className="text-[10px] uppercase">
+            Translating
+          </Badge>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="xs" variant="ghost">
@@ -502,7 +510,13 @@ export default function HeaderBar({
           <DropdownMenuContent align="end">
             <DropdownMenuRadioGroup
               value={selectedLocaleId || ''}
-              onValueChange={(value) => setSelectedLocaleId(value)}
+              onValueChange={(value) => {
+                setSelectedLocaleId(value);
+                // Eager-load translations so the canvas reflects the new locale
+                // without waiting for component-level effects to run. The store
+                // short-circuits for the default locale and for cached locales.
+                loadTranslations(value);
+              }}
             >
               {locales.map((locale) => (
                 <DropdownMenuRadioItem key={locale.id} value={locale.id}>
