@@ -100,7 +100,7 @@ import { isFieldVariable, getCollectionVariable, findParentCollectionLayer, find
 import { detachSpecificLayerFromComponent } from '@/lib/component-utils';
 import { convertContentToValue, parseValueToContent } from '@/lib/cms-variables-utils';
 import { createTextComponentVariableValue } from '@/lib/variable-utils';
-import { getRichTextValue, extractPlainTextFromTiptap } from '@/lib/tiptap-utils';
+import { getRichTextValue, extractPlainTextFromTiptap, getSoleCmsFieldBinding } from '@/lib/tiptap-utils';
 import { DEFAULT_TEXT_STYLES, getTextStyle, getTiptapTextContent } from '@/lib/text-format-utils';
 import { buildFieldGroupsForLayer, getFieldIcon, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { getInverseReferenceFields } from '@/lib/collection-utils';
@@ -304,6 +304,24 @@ const RightSidebar = React.memo(function RightSidebar({
       translationSource.sourceId,
     );
   }, [selectedLayer, translationSource]);
+
+  // When the selected layer's text is a single CMS-bound variable (e.g. a
+  // heading whose only content is a `[Content]` field reference), the textarea
+  // editor in the sidebar would just show "[Content]" — the actual translation
+  // happens against the bound CMS item, not against the layer. Detect this so
+  // the panel can render a read-only "Content → variable" row instead, and
+  // hide the unhelpful textarea pair.
+  const layerCmsTextBinding = useMemo(() => {
+    if (!selectedLayer || !isLocalizing) return null;
+    if (selectedLayer.variables?.text?.type !== 'dynamic_rich_text') return null;
+    const richValue = getRichTextValue(selectedLayer.variables);
+    return getSoleCmsFieldBinding(richValue);
+  }, [selectedLayer, isLocalizing]);
+
+  const translatableItemsExcludingCmsText = useMemo(() => {
+    if (!layerCmsTextBinding) return translatableItemsForSelectedLayer;
+    return translatableItemsForSelectedLayer.filter((item) => !item.content_key.endsWith(':text'));
+  }, [translatableItemsForSelectedLayer, layerCmsTextBinding]);
 
   const hasCustomAttributes = !!(selectedLayer?.settings?.customAttributes &&
     Object.keys(selectedLayer.settings.customAttributes).length > 0);
@@ -2035,7 +2053,33 @@ const RightSidebar = React.memo(function RightSidebar({
                 the selected layer. */}
             {isLocalizing && selectedLayer && currentLocale && (
               <div className="flex flex-col gap-6 py-5">
-                {translatableItemsForSelectedLayer.length === 0 ? (
+                {/* CMS-bound text indicator — shown when the layer's text is a
+                    single CMS variable. The translation happens on the bound
+                    CMS item (via the collection item sheet), not here, so the
+                    sidebar just surfaces the connected variable for context.
+                    No clear/X button — the binding can't be removed in
+                    translation mode. */}
+                {layerCmsTextBinding && (
+                  <div className="grid grid-cols-3 items-center">
+                    <Label variant="muted">Content</Label>
+                    <div className="col-span-2 *:w-full">
+                      <Button
+                        asChild
+                        variant="data"
+                        className="justify-between! cursor-default"
+                      >
+                        <div>
+                          <span className="flex items-center gap-1.5 truncate">
+                            <Icon name="database" className="size-3 opacity-60 shrink-0" />
+                            <span className="truncate">{layerCmsTextBinding.label || 'CMS Field'}</span>
+                          </span>
+                        </div>
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {translatableItemsExcludingCmsText.length === 0 && !layerCmsTextBinding ? (
                   <Empty>
                     <EmptyMedia variant="icon">
                       <Icon name="globe" />
@@ -2045,7 +2089,7 @@ const RightSidebar = React.memo(function RightSidebar({
                       This layer has no translatable content. Select a text or media element.
                     </EmptyDescription>
                   </Empty>
-                ) : (
+                ) : translatableItemsExcludingCmsText.length > 0 ? (
                   // Group rows under language headers: all source values for
                   // the default locale first, then the editable translations
                   // for the active locale. Easier to scan when a layer has
@@ -2057,7 +2101,7 @@ const RightSidebar = React.memo(function RightSidebar({
                           ? defaultLocale?.label || 'Default'
                           : currentLocale.label}
                       </Label>
-                      {translatableItemsForSelectedLayer.map((item) => {
+                      {translatableItemsExcludingCmsText.map((item) => {
                         // Rich-text element layers are previewed read-only and
                         // edited in the dedicated RichTextEditorSheet overlay,
                         // launched via the per-row "Expand to edit" button.
@@ -2084,7 +2128,7 @@ const RightSidebar = React.memo(function RightSidebar({
                       })}
                     </div>
                   ))
-                )}
+                ) : null}
               </div>
             )}
 
