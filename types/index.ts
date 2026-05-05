@@ -135,6 +135,25 @@ export interface PositioningDesign {
   zIndex?: string;
 }
 
+export interface TransformsDesign {
+  isActive?: boolean;
+  scale?: string;
+  rotate?: string;
+  translateX?: string;
+  translateY?: string;
+  skewX?: string;
+  skewY?: string;
+  transformOrigin?: string;
+}
+
+export interface TransitionsDesign {
+  isActive?: boolean;
+  transitionProperty?: string;
+  duration?: string;
+  easing?: string;
+  delay?: string;
+}
+
 export interface DesignProperties {
   layout?: LayoutDesign;
   typography?: TypographyDesign;
@@ -144,6 +163,8 @@ export interface DesignProperties {
   backgrounds?: BackgroundsDesign;
   effects?: EffectsDesign;
   positioning?: PositioningDesign;
+  transforms?: TransformsDesign;
+  transitions?: TransitionsDesign;
 }
 
 export interface FormSettings {
@@ -307,7 +328,7 @@ export interface InteractionTween {
 
 export type ApplyStyles = 'on-load' | 'on-trigger';
 
-export type TweenPropertyKey = 'x' | 'y' | 'rotation' | 'scale' | 'skewX' | 'skewY' | 'autoAlpha' | 'display' | 'height';
+export type TweenPropertyKey = 'x' | 'y' | 'rotation' | 'scale' | 'skewX' | 'skewY' | 'autoAlpha' | 'display' | 'width' | 'height';
 
 export type InteractionApplyStyles = Partial<Record<TweenPropertyKey, ApplyStyles>>;
 
@@ -835,6 +856,7 @@ export interface SupabaseConfig {
   serviceRoleKey: string;
   connectionUrl: string; // With [YOUR-PASSWORD] placeholder
   dbPassword: string; // Actual password to replace [YOUR-PASSWORD]
+  supabaseUrl?: string; // Explicit API URL for self-hosted instances (e.g. https://supabase.my-company.com)
 }
 
 // Internal credentials structure (derived from SupabaseConfig)
@@ -845,7 +867,7 @@ export interface SupabaseCredentials {
   dbPassword: string;
   // Derived properties
   projectId: string;
-  projectUrl: string; // API URL: https://[PROJECT_ID].supabase.co
+  projectUrl: string; // API URL — explicit or derived from project ID
   dbHost: string;
   dbPort: number;
   dbName: string;
@@ -944,7 +966,7 @@ export interface ActivityNotification {
 }
 
 // Collection Types (EAV Architecture)
-export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'date_only' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'status';
+export type CollectionFieldType = 'text' | 'number' | 'boolean' | 'date' | 'date_only' | 'color' | 'reference' | 'multi_reference' | 'rich_text' | 'image' | 'audio' | 'video' | 'document' | 'link' | 'email' | 'phone' | 'option' | 'status';
 export type CollectionSortDirection = 'asc' | 'desc' | 'manual';
 
 export interface CollectionSorting {
@@ -982,6 +1004,7 @@ export interface UpdateCollectionData {
 /** Field-specific settings stored in the data column */
 export interface CollectionFieldData {
   multiple?: boolean; // For asset fields - allow multiple files
+  options?: { id: string; name: string }[]; // For option fields - selectable values
 }
 
 export interface CreateCollectionFieldData {
@@ -1070,7 +1093,7 @@ export interface CollectionImport {
   processed_rows: number;
   failed_rows: number;
   column_mapping: Record<string, string>; // csvColumn -> fieldId
-  csv_data: Record<string, string>[]; // Array of row objects
+  csv_data: { storage_path: string } | Record<string, string>[] | null;
   errors: string[] | null;
   created_at: string;
   updated_at: string;
