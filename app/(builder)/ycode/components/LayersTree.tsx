@@ -359,7 +359,7 @@ const LayerRow = React.memo(function LayerRow({
             name={node.sublayer.icon as any}
             className={cn('size-3 mx-1.5 shrink-0', isSelected ? 'opacity-70' : 'opacity-40')}
           />
-          <span className={cn('text-2xs truncate select-none', isSelected ? 'opacity-90' : 'opacity-60')}>
+          <span className={cn('text-2xs truncate select-none min-w-15', isSelected ? 'opacity-90' : 'opacity-60')}>
             {node.sublayer.label}
           </span>
         </div>
@@ -550,7 +550,7 @@ const LayerRow = React.memo(function LayerRow({
             />
           ) : (
             <span
-              className="grow text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap select-none"
+              className="grow text-xs font-medium overflow-hidden text-ellipsis whitespace-nowrap select-none min-w-15"
               onDoubleClick={(e) => {
                 e.stopPropagation();
                 if (node.id !== 'body') {
@@ -566,85 +566,70 @@ const LayerRow = React.memo(function LayerRow({
             </span>
           )}
 
-          {/* Lock Indicator - show when layer is locked by another user */}
-          {isLockedByOther && (
-            <div className="mr-2 shrink-0">
-              <CollaboratorBadge
-                collaborator={{
-                  userId: lockOwnerUser?.user_id || '',
-                  email: lockOwnerUser?.email,
-                  color: lockOwnerUser?.color,
-                }}
-                size="xs"
-                tooltipPrefix="Editing by"
-              />
-            </div>
-          )}
+          <div className="sticky right-0 flex items-center shrink-0">
+            {isLockedByOther && (
+              <div className="mr-2 shrink-0">
+                <CollaboratorBadge
+                  collaborator={{
+                    userId: lockOwnerUser?.user_id || '',
+                    email: lockOwnerUser?.email,
+                    color: lockOwnerUser?.color,
+                  }}
+                  size="xs"
+                  tooltipPrefix="Editing by"
+                />
+              </div>
+            )}
 
-          {/* Style Indicator - temporarily disabled */}
-          {/* {node.layer.styleId && (
-            <div className="flex items-center gap-1 mr-2 shrink-0">
-              <LayersIcon className="w-3 h-3 text-purple-400" />
-              {(() => {
-                const appliedStyle = getStyleById(node.layer.styleId);
-                return appliedStyle && hasStyleOverrides(node.layer, appliedStyle) && (
-                  <div className="w-1.5 h-1.5 rounded-full bg-orange-400" title="Style overridden" />
-                );
-              })()}
-            </div>
-          )} */}
-
-          {/* Interaction trigger indicator */}
-          {interactionTriggerLayerIds.includes(node.id) && (
-            <Icon
-              name="zap"
-              className={cn(
-                'size-3 mr-2 shrink-0',
-                activeInteractionTriggerLayerId === node.id ? 'text-white/80' : 'text-white/40'
-              )}
-            />
-          )}
-
-          {/* Interaction target indicator */}
-          {interactionTargetLayerIds.includes(node.id) && !interactionTriggerLayerIds.includes(node.id) && (
-            <Icon
-              name="zap-outline"
-              className={cn(
-                'size-3 mr-2 shrink-0',
-                activeInteractionTargetLayerIds.includes(node.id) ? 'text-white/70' : 'text-white/40'
-              )}
-            />
-          )}
-
-          {/* Visibility toggle */}
-          {node.id !== 'body' && !isRenaming && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleVisibility(node.id);
-              }}
-              onPointerDown={(e) => e.stopPropagation()}
-              className={cn(
-                'size-6 flex items-center justify-center shrink-0 mr-1 rounded cursor-pointer',
-                node.layer.settings?.hidden
-                  ? cn(
-                    'opacity-60',
-                    isSelected ? 'opacity-80 hover:opacity-100' : 'hover:opacity-100'
-                  )
-                  : cn(
-                    'opacity-0 group-hover:opacity-40',
-                    isSelected ? 'group-hover:opacity-60' : '',
-                    'hover:opacity-100!'
-                  ),
-              )}
-              aria-label={node.layer.settings?.hidden ? 'Show element' : 'Hide element'}
-            >
+            {interactionTriggerLayerIds.includes(node.id) && (
               <Icon
-                name={node.layer.settings?.hidden ? 'eye-off' : 'eye'}
-                className="size-3"
+                name="zap"
+                className={cn(
+                  'size-3 mr-2 shrink-0',
+                  activeInteractionTriggerLayerId === node.id ? 'text-white/80' : 'text-white/40'
+                )}
               />
-            </button>
-          )}
+            )}
+
+            {interactionTargetLayerIds.includes(node.id) && !interactionTriggerLayerIds.includes(node.id) && (
+              <Icon
+                name="zap-outline"
+                className={cn(
+                  'size-3 mr-2 shrink-0',
+                  activeInteractionTargetLayerIds.includes(node.id) ? 'text-white/70' : 'text-white/40'
+                )}
+              />
+            )}
+
+            {node.id !== 'body' && !isRenaming && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleVisibility(node.id);
+                }}
+                onPointerDown={(e) => e.stopPropagation()}
+                className={cn(
+                  'items-center justify-center shrink-0 mr-1 rounded cursor-pointer',
+                  node.layer.settings?.hidden
+                    ? cn(
+                      'size-6 flex opacity-60',
+                      isSelected ? 'opacity-80 hover:opacity-100' : 'hover:opacity-100'
+                    )
+                    : cn(
+                      'size-0 hidden group-hover:flex group-hover:size-6 group-hover:opacity-40',
+                      isSelected ? 'group-hover:opacity-60' : '',
+                      'hover:opacity-100!'
+                    ),
+                )}
+                aria-label={node.layer.settings?.hidden ? 'Show element' : 'Hide element'}
+              >
+                <Icon
+                  name={node.layer.settings?.hidden ? 'eye-off' : 'eye'}
+                  className="size-3"
+                />
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </LayerContextMenu>
@@ -1205,6 +1190,8 @@ export default function LayersTree({
   }, []);
 
   const ROW_HEIGHT = 32;
+  const maxDepth = useMemo(() => flattenedNodes.reduce((max, n) => Math.max(max, n.depth), 0), [flattenedNodes]);
+
   const virtualizer = useVirtualizer({
     count: flattenedNodes.length,
     getScrollElement: () => scrollContainerRef.current,
@@ -1229,6 +1216,7 @@ export default function LayersTree({
     const virtualItems = virtualizer.getVirtualItems();
     const item = virtualItems.find(v => v.index === idx);
 
+    let needsVerticalScroll = true;
     if (item) {
       const wrapperTop = wrapperRef.current?.getBoundingClientRect().top ?? 0;
       const scrollTop = scrollEl.getBoundingClientRect().top;
@@ -1237,24 +1225,38 @@ export default function LayersTree({
       const viewBottom = scrollTop + scrollEl.clientHeight - SCROLL_MARGIN;
 
       if (itemScreenTop >= viewTop && itemScreenTop + ROW_HEIGHT <= viewBottom) {
-        return;
+        needsVerticalScroll = false;
       }
     }
 
-    // Jump to item first so virtualizer renders it, then center manually
-    const isAbove = idx * ROW_HEIGHT < scrollEl.scrollTop;
-    virtualizer.scrollToIndex(idx, { align: isAbove ? 'start' : 'end' });
+    if (needsVerticalScroll) {
+      const isAbove = idx * ROW_HEIGHT < scrollEl.scrollTop;
+      virtualizer.scrollToIndex(idx, { align: isAbove ? 'start' : 'end' });
+    }
 
     const timeout = setTimeout(() => {
       const wrapperEl = wrapperRef.current;
       if (!wrapperEl || !scrollEl) return;
 
-      const wrapperRect = wrapperEl.getBoundingClientRect();
-      const scrollRect = scrollEl.getBoundingClientRect();
-      const wrapperOffset = wrapperRect.top - scrollRect.top + scrollEl.scrollTop;
-      const itemTop = wrapperOffset + idx * ROW_HEIGHT;
-      const targetScroll = itemTop - (scrollEl.clientHeight / 2) + (ROW_HEIGHT / 2);
-      scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+      if (needsVerticalScroll) {
+        const wrapperRect = wrapperEl.getBoundingClientRect();
+        const scrollRect = scrollEl.getBoundingClientRect();
+        const wrapperOffset = wrapperRect.top - scrollRect.top + scrollEl.scrollTop;
+        const itemTop = wrapperOffset + idx * ROW_HEIGHT;
+        const targetScroll = itemTop - (scrollEl.clientHeight / 2) + (ROW_HEIGHT / 2);
+        scrollEl.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+      }
+
+      // Horizontal scroll: ensure selected row content is visible
+      const node = flattenedNodes[idx];
+      if (node) {
+        const contentLeft = node.depth * 14 + 8;
+        if (contentLeft < scrollEl.scrollLeft) {
+          scrollEl.scrollTo({ left: Math.max(0, contentLeft - 8), behavior: 'smooth' });
+        } else if (contentLeft > scrollEl.scrollLeft + scrollEl.clientWidth - 140) {
+          scrollEl.scrollTo({ left: contentLeft - 8, behavior: 'smooth' });
+        }
+      }
     }, 100);
 
     return () => clearTimeout(timeout);
@@ -1917,7 +1919,7 @@ export default function LayersTree({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <div ref={wrapperRef} style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+      <div ref={wrapperRef} style={{ height: virtualizer.getTotalSize(), position: 'relative', minWidth: maxDepth > 0 ? `${maxDepth * 14 + 170}px` : undefined }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const node = flattenedNodes[virtualRow.index];
           const selectionData = nodeSelectionData.get(node.id)!;
