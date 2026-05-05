@@ -252,7 +252,10 @@ export default function SidebarTranslationRow({
             value={sourceDisplayValue}
             readOnly
             tabIndex={-1}
-            className="resize-none text-muted-foreground"
+            // Cap height so long translations scroll inside the field instead
+            // of pushing the rest of the inspector down (textarea uses
+            // field-sizing-content by default, which auto-grows).
+            className="resize-none text-muted-foreground max-h-32 overflow-y-auto"
             rows={3}
           />
         )}
@@ -276,7 +279,7 @@ export default function SidebarTranslationRow({
             readOnly
             tabIndex={-1}
             placeholder={sourceDisplayValue || 'No translation yet'}
-            className="resize-none text-muted-foreground"
+            className="resize-none text-muted-foreground max-h-32 overflow-y-auto"
             rows={3}
           />
         ) : (
@@ -285,7 +288,7 @@ export default function SidebarTranslationRow({
             onChange={(e) => handleTextChange(e.target.value)}
             onBlur={(e) => handleTextBlur(e.target.value)}
             placeholder={sourceDisplayValue || 'Enter translation...'}
-            className="resize-none"
+            className="resize-none max-h-32 overflow-y-auto"
             rows={3}
           />
         )}
