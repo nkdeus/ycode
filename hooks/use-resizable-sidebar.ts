@@ -28,6 +28,7 @@ export function useResizableSidebar({
 }: UseResizableSidebarOptions) {
   const resolvedKey = storageKey ?? `${STORAGE_KEY_PREFIX}${side}`;
   const setSidebarResizing = useEditorStore((state) => state.setSidebarResizing);
+  const setLeftSidebarWidth = useEditorStore((state) => state.setLeftSidebarWidth);
 
   const [width, setWidth] = useState(() => {
     if (typeof window === 'undefined') return defaultWidth;
@@ -47,7 +48,8 @@ export function useResizableSidebar({
 
   useEffect(() => {
     latestWidth.current = width;
-  }, [width]);
+    if (side === 'left') setLeftSidebarWidth(width);
+  }, [width, side, setLeftSidebarWidth]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

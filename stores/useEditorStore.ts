@@ -159,6 +159,8 @@ interface EditorStoreWithHistory extends EditorState {
   // Sidebar resize state (hides outlines during resize drag)
   isSidebarResizing: boolean;
   setSidebarResizing: (value: boolean) => void;
+  leftSidebarWidth: number;
+  setLeftSidebarWidth: (value: number) => void;
   // Canvas context menu state (hides overlay while menu is open)
   isCanvasContextMenuOpen: boolean;
   setCanvasContextMenuOpen: (value: boolean) => void;
@@ -248,6 +250,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setSliderAnimating: (value) => set({ isSliderAnimating: value }),
   isSidebarResizing: false,
   setSidebarResizing: (value) => set({ isSidebarResizing: value }),
+  leftSidebarWidth: 256,
+  setLeftSidebarWidth: (value) => set({ leftSidebarWidth: value }),
   isCanvasContextMenuOpen: false,
   setCanvasContextMenuOpen: (value) => set({ isCanvasContextMenuOpen: value }),
   sliderSnapCounts: {},

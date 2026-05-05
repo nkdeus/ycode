@@ -7,7 +7,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // 4. Internal components
 import LayersTree from './LayersTree';
-import LeftSidebarPages from './LeftSidebarPages';
+import LeftSidebarPages, { type LeftSidebarPagesHandle } from './LeftSidebarPages';
 
 // Lazy-loaded components (heavy, not needed immediately)
 const ElementLibrary = lazy(() => import('./ElementLibrary'));
@@ -55,6 +55,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
   const { sidebarTab } = useEditorUrl();
   const [showElementLibrary, setShowElementLibrary] = useState(false);
   const { width: sidebarWidth, isDragging: isResizing, handleMouseDown: handleResizeMouseDown } = useResizableSidebar({ side: 'left' });
+  const pagesRef = useRef<LeftSidebarPagesHandle>(null);
   const [assetMessage, setAssetMessage] = useState<string | null>(null);
 
   // Optimize store subscriptions - scoped to current page only
@@ -297,8 +298,13 @@ const LeftSidebar = React.memo(function LeftSidebar({
         <div className="w-full">
           <Tabs
             value={activeTab}
-            onValueChange={(value) => {
+            onValueChange={async (value) => {
               const newTab = value as EditorTab;
+
+              if (newTab === 'layers' && pagesRef.current) {
+                const canSwitch = await pagesRef.current.checkAndCloseSettings();
+                if (!canSwitch) return;
+              }
 
               setActiveSidebarTab(newTab);
               setShowElementLibrary(false);
@@ -369,6 +375,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
               forceMount
             >
               <LeftSidebarPages
+                ref={pagesRef}
                 pages={pages}
                 folders={folders}
                 currentPageId={currentPageId}
@@ -402,7 +409,6 @@ const LeftSidebar = React.memo(function LeftSidebar({
           isOpen={showElementLibrary}
           onClose={() => setShowElementLibrary(false)}
           liveLayerUpdates={liveLayerUpdates}
-          sidebarWidth={sidebarWidth}
         />
       </Suspense>
     </>
