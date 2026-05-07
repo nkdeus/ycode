@@ -6,6 +6,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { fetchGlobalPageSettings } from '@/lib/generate-page-metadata';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
+import { matchRedirect } from '@/lib/redirect-utils';
 import type { Redirect as RedirectType } from '@/types';
 
 // Internal pagination path: always dynamic/no-store.
@@ -26,12 +27,12 @@ export default async function DynamicSlugPage({ params, searchParams }: DynamicS
 
   const redirects = await getSettingByKey('redirects') as RedirectType[] | null;
   if (redirects && Array.isArray(redirects)) {
-    const matchedRedirect = redirects.find((r) => r.oldUrl === currentPath);
-    if (matchedRedirect) {
-      if (matchedRedirect.type === '302') {
-        redirect(matchedRedirect.newUrl);
+    const matched = matchRedirect(currentPath, redirects);
+    if (matched) {
+      if (matched.type === '302') {
+        redirect(matched.newUrl);
       } else {
-        permanentRedirect(matchedRedirect.newUrl);
+        permanentRedirect(matched.newUrl);
       }
     }
   }

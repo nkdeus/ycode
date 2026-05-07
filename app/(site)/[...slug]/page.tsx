@@ -10,6 +10,7 @@ import PasswordForm from '@/components/PasswordForm';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { parseAuthCookie, getPasswordProtection, fetchFoldersForAuth } from '@/lib/page-auth';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { matchRedirect } from '@/lib/redirect-utils';
 import type { Page, PageFolder, Translation, Redirect as RedirectType } from '@/types';
 
 // Static by default for performance, dynamic only when pagination is requested
@@ -258,12 +259,12 @@ export default async function Page({ params }: PageProps) {
   const currentPath = `/${slugPath}`;
   const redirects = await fetchCachedRedirects();
   if (redirects && Array.isArray(redirects)) {
-    const matchedRedirect = redirects.find((r) => r.oldUrl === currentPath);
-    if (matchedRedirect) {
-      if (matchedRedirect.type === '302') {
-        redirect(matchedRedirect.newUrl);
+    const matched = matchRedirect(currentPath, redirects);
+    if (matched) {
+      if (matched.type === '302') {
+        redirect(matched.newUrl);
       } else {
-        permanentRedirect(matchedRedirect.newUrl);
+        permanentRedirect(matched.newUrl);
       }
     }
   }
