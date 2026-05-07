@@ -1190,6 +1190,31 @@ export function canAddChild(parent: Layer, child: Layer): boolean {
   return true;
 }
 
+export const LINK_NESTING_ERROR = {
+  title: 'Links cannot be nested',
+  description: 'The pasted layer contains a link and cannot be placed inside a link.',
+} as const;
+
+/**
+ * Check if a layer can be pasted as a child of a target parent,
+ * considering both the direct parent and ancestor link nesting.
+ */
+export function canPasteIntoParent(layers: Layer[], parentId: string, childToPaste: Layer): boolean {
+  const parent = findLayerById(layers, parentId);
+  if (!parent) return true;
+
+  if (!canAddChild(parent, childToPaste)) {
+    return false;
+  }
+
+  const hasLinkAncestor = findAncestor(layers, parentId, (ancestor) => layerHasLink(ancestor));
+  if (hasLinkAncestor && hasLinkInTree(childToPaste)) {
+    return false;
+  }
+
+  return true;
+}
+
 /**
  * Check if a layer can have children based on its name/type
  */
