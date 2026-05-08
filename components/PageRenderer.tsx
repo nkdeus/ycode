@@ -67,6 +67,16 @@ function collectLayerPageLinks(layers: Layer[]): PageLinkRef[] {
       const { collection_item_id, id: page_id } = layer.variables.link.page ?? {};
       if (collection_item_id && page_id) results.push({ collection_item_id, page_id });
     }
+    // Field-bound links: extract page refs from pre-resolved link values
+    if (layer.variables?.link?.type === 'field') {
+      const resolvedValue = layer.variables.link.field?.data?._resolvedValue;
+      if (resolvedValue) {
+        const linkValue = parseCollectionLinkValue(resolvedValue);
+        if (linkValue?.type === 'page' && linkValue.page?.collection_item_id && linkValue.page?.id) {
+          results.push({ collection_item_id: linkValue.page.collection_item_id, page_id: linkValue.page.id });
+        }
+      }
+    }
     const textVar = layer.variables?.text as any;
     if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
       results.push(...collectTiptapPageLinks(textVar.data.content));
