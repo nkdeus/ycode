@@ -28,6 +28,7 @@ if (process.env.SUPABASE_URL) {
 }
 
 const nextConfig: NextConfig = {
+  trailingSlash: false,
   staticPageGenerationTimeout: 120,
   experimental: {
     proxyClientMaxBodySize: '500mb',
@@ -87,6 +88,15 @@ const nextConfig: NextConfig = {
             // Cache until re-published: CDN caches for up to 1 year
             // On publish, revalidatePath purges CDN; revalidateTag purges data cache
             value: 'public, s-maxage=31536000, stale-while-revalidate=31536000',
+          },
+          {
+            // Open the TLS connection to fonts.gstatic.com while the document
+            // is still streaming so woff2 binaries can be fetched the moment
+            // the inlined @font-face rules are parsed. Sending this as a
+            // response header (vs. <link rel=preconnect> in <head>) lets the
+            // browser act on it before parsing the document.
+            key: 'Link',
+            value: '<https://fonts.gstatic.com>; rel=preconnect; crossorigin',
           },
         ],
       },
