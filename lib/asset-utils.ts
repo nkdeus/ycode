@@ -518,8 +518,17 @@ export function computeImageSizes(
   return getImageSizes();
 }
 
-/** Layer classes signalling a full-bleed image — strongest LCP signal. */
+/** Layer classes signalling a full-bleed image — base hero signal. */
 const FULL_BLEED_CLASS_RE = /\b(?:w-full|w-screen|w-\[100%\])\b/;
+
+/** `object-cover` fills the container, cropping if needed — classic hero pattern. */
+const OBJECT_COVER_RE = /\bobject-cover\b/;
+
+/** `h-full` lets a hero image stretch to the parent's height — pairs with `object-cover`. */
+const HEIGHT_FILL_RE = /\bh-full\b/;
+
+/** `object-contain` letterboxes inside the slot — typical of product/screenshot showcases. */
+const OBJECT_CONTAIN_RE = /\bobject-contain\b/;
 
 /** Layer classes signalling a constrained (often portrait) image — weak LCP signal. */
 const CONSTRAINED_CLASS_RE = /\bmax-h-\[/;
@@ -527,11 +536,16 @@ const CONSTRAINED_CLASS_RE = /\bmax-h-\[/;
 /**
  * Find the LCP (Largest Contentful Paint) candidate for a given page tree.
  *
- * Scoring (tiered, highest tier wins; ties broken by intrinsic area):
- *   tier 2 — image with `w-full` / `w-[100%]` / `w-screen` classes
- *            (full-bleed hero pattern — almost always the LCP on mobile)
- *   tier 1 — image with no `max-h-[...]` constraint
- *   tier 0 — anything else (constrained portraits etc.)
+ * Scoring (tiered, highest tier wins; ties broken by intrinsic area, then by
+ * tree order — earlier images on the page win because they're more likely to
+ * land in the initial viewport on mobile):
+ *   tier 3 — full-bleed image with `object-cover` and/or `h-full` (hero pattern
+ *            that fills the slot; Lighthouse measures rendered area, and
+ *            cover-cropped images dominate the viewport).
+ *   tier 2 — full-bleed image with `object-contain` (showcase pattern —
+ *            letterboxed inside the slot, smaller rendered area).
+ *   tier 1 — image with no `max-h-[...]` constraint.
+ *   tier 0 — `max-h-[...]` constrained image (sidebar portraits etc.).
  *
  * This replaces the older "first qualifying image" and "largest intrinsic
  * area" heuristics — both picked the wrong image when a tall constrained
@@ -567,7 +581,15 @@ export function findLcpCandidate(
   };
 
   const scoreClasses = (classes: string): number => {
-    if (FULL_BLEED_CLASS_RE.test(classes)) return 2;
+    const fullBleed = FULL_BLEED_CLASS_RE.test(classes);
+    if (fullBleed) {
+      // Cover-cropped or height-filling hero — dominates the rendered viewport.
+      if (OBJECT_COVER_RE.test(classes) || HEIGHT_FILL_RE.test(classes)) return 3;
+      // Contain-fit showcase — letterboxed, smaller rendered area than cover.
+      if (OBJECT_CONTAIN_RE.test(classes)) return 2;
+      // Full-bleed without an explicit fit — assume hero.
+      return 3;
+    }
     if (CONSTRAINED_CLASS_RE.test(classes)) return 0;
     return 1;
   };
@@ -605,6 +627,9 @@ export function findLcpCandidate(
           const area = (width ?? 0) * (height ?? 0);
 
           // Higher tier always wins. Within a tier, larger intrinsic area wins.
+          // Strict `>` on area means tree-order earliest survives ties — that
+          // matches the mobile viewport (top of page is more likely visible
+          // at LCP measurement time).
           if (
             !best
             || tier > best.tier
