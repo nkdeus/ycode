@@ -518,20 +518,30 @@ export function computeImageSizes(
   return getImageSizes();
 }
 
+// Class boundary anchors. `\b` does NOT match around `[` / `]` (both are
+// non-word characters), so `\bw-\[100%\]\b` silently fails to match the
+// Tailwind arbitrary-value class `w-[100%]` — the trailing `\b` falls between
+// `]` and the next space, neither of which is a word character. Use explicit
+// whitespace/string-edge anchors instead.
+const CLASS_BOUNDARY_START = '(?:^|\\s)';
+const CLASS_BOUNDARY_END = '(?=\\s|$)';
+
 /** Layer classes signalling a full-bleed image — base hero signal. */
-const FULL_BLEED_CLASS_RE = /\b(?:w-full|w-screen|w-\[100%\])\b/;
+const FULL_BLEED_CLASS_RE = new RegExp(
+  `${CLASS_BOUNDARY_START}(?:w-full|w-screen|w-\\[100%\\])${CLASS_BOUNDARY_END}`
+);
 
 /** `object-cover` fills the container, cropping if needed — classic hero pattern. */
-const OBJECT_COVER_RE = /\bobject-cover\b/;
+const OBJECT_COVER_RE = new RegExp(`${CLASS_BOUNDARY_START}object-cover${CLASS_BOUNDARY_END}`);
 
 /** `h-full` lets a hero image stretch to the parent's height — pairs with `object-cover`. */
-const HEIGHT_FILL_RE = /\bh-full\b/;
+const HEIGHT_FILL_RE = new RegExp(`${CLASS_BOUNDARY_START}h-full${CLASS_BOUNDARY_END}`);
 
 /** `object-contain` letterboxes inside the slot — typical of product/screenshot showcases. */
-const OBJECT_CONTAIN_RE = /\bobject-contain\b/;
+const OBJECT_CONTAIN_RE = new RegExp(`${CLASS_BOUNDARY_START}object-contain${CLASS_BOUNDARY_END}`);
 
 /** Layer classes signalling a constrained (often portrait) image — weak LCP signal. */
-const CONSTRAINED_CLASS_RE = /\bmax-h-\[/;
+const CONSTRAINED_CLASS_RE = new RegExp(`${CLASS_BOUNDARY_START}max-h-\\[`);
 
 /**
  * Find the LCP (Largest Contentful Paint) candidate for a given page tree.
