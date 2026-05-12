@@ -11,7 +11,7 @@ import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
 import { collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getImageSizes, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
@@ -397,8 +397,15 @@ export default async function PageRenderer({
     const { getAllFonts: getAllDraftFonts } = await import('@/lib/repositories/fontRepository');
     const { getPublishedFonts } = await import('@/lib/repositories/fontRepository');
     const fonts = isPreview ? await getAllDraftFonts() : await getPublishedFonts();
+    // For published pages, narrow Google fonts to the weights/styles actually
+    // used in the generated CSS — this skips italic woff2 fetches when no
+    // italic is used and tightens variable-font wght ranges. No-op in preview
+    // because draft CSS may not be fully generated yet.
+    const fontsForLinks = usePublishedData
+      ? narrowFontsToUsedWeights(fonts, generatedCss)
+      : fonts;
     fontsCss = buildCustomFontsCss(fonts) + buildFontClassesCss(fonts);
-    googleFontLinkUrls = getGoogleFontLinks(fonts);
+    googleFontLinkUrls = getGoogleFontLinks(fontsForLinks);
 
     // Inline the resolved @font-face CSS so the browser skips the blocking
     // round-trip to fonts.googleapis.com and goes straight to gstatic for

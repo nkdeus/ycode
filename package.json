@@ -149,5 +149,13 @@
     "*.{js,jsx,ts,tsx}": [
       "eslint --fix"
     ]
-  }
+  },
+  "browserslist": [
+    "Chrome >= 109",
+    "Edge >= 109",
+    "Firefox >= 115",
+    "Safari >= 16",
+    "iOS >= 16",
+    "not dead"
+  ]
 }

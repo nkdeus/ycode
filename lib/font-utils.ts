@@ -301,6 +301,62 @@ export function getGoogleFontLinks(fonts: Font[]): string[] {
 }
 
 /**
+ * Narrow each Google font's weights and italic variants to only what the
+ * published CSS actually uses. Variable fonts on Google Fonts ship one woff2
+ * per (style × axis-range) combination, so dropping unused italic variants
+ * removes a whole font file and tightening the wght range can drop ~20–30%
+ * of the binary size.
+ *
+ * Safe fallback: if we can't detect any `font-weight` rule in the CSS, the
+ * font is returned untouched (better to over-fetch than break the page).
+ */
+export function narrowFontsToUsedWeights(fonts: Font[], css: string | undefined): Font[] {
+  if (!css) return fonts;
+
+  const usedWeights = new Set<number>();
+  for (const m of css.matchAll(/font-weight\s*:\s*(\d{3})\b/g)) {
+    const w = parseInt(m[1], 10);
+    if (w >= 100 && w <= 900) usedWeights.add(w);
+  }
+  // No font-weight declarations found — leave fonts untouched.
+  if (usedWeights.size === 0) return fonts;
+
+  const usesItalic = /font-style\s*:\s*italic\b/.test(css);
+
+  return fonts.map(font => {
+    if (font.type !== 'google') return font;
+
+    // Filter italic variants when no italics are used anywhere on the page.
+    const filteredVariants = usesItalic
+      ? font.variants
+      : font.variants?.filter(v => v !== 'italic' && !v.endsWith('italic'));
+
+    // Filter declared weights to the used set when discrete weights exist.
+    const filteredWeights = font.weights?.filter(w => usedWeights.has(parseInt(w, 10)));
+
+    // Tighten variable-font axes (wght range) to bracket the used weights.
+    const usedSorted = Array.from(usedWeights).sort((a, b) => a - b);
+    const minUsed = usedSorted[0];
+    const maxUsed = usedSorted[usedSorted.length - 1];
+    const filteredAxes = font.axes?.map(axis => {
+      if (axis.tag !== 'wght') return axis;
+      return {
+        ...axis,
+        start: Math.max(axis.start, minUsed),
+        end: Math.min(axis.end, maxUsed),
+      };
+    });
+
+    return {
+      ...font,
+      variants: filteredVariants && filteredVariants.length > 0 ? filteredVariants : font.variants,
+      weights: filteredWeights && filteredWeights.length > 0 ? filteredWeights : font.weights,
+      axes: filteredAxes,
+    };
+  });
+}
+
+/**
  * Modern Chrome User-Agent. Google Fonts varies its CSS response by UA —
  * sending a recent Chrome UA reliably returns woff2 with `unicode-range`
  * subset rules, which is what we want to inline.

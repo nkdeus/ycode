@@ -5,6 +5,7 @@
   "outputDirectory": ".next",
   "installCommand": "npm install",
   "framework": "nextjs",
+  "regions": ["fra1"],
   "functions": {
     "app/ycode/api/**/*.ts": {
       "maxDuration": 60
