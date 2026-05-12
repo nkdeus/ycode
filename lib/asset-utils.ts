@@ -384,11 +384,23 @@ export function getImageSizes(): string {
   return '100vw';
 }
 
-// Semantic layer names whose descendant images are almost never the LCP
-// (logos, menus, footer marks). Tracked via ancestor walk in
-// `findLcpCandidateLayerId` so we don't accidentally prioritize a header
-// logo over the actual hero image.
+// Semantic layer names / tag overrides whose descendant images are almost
+// never the LCP (logos, menus, footer marks). Tracked via ancestor walk in
+// `findLcpCandidate` so we don't accidentally prioritize a header logo over
+// the actual hero image.
+//
+// Both `layer.name` AND `layer.settings.tag` are checked because YCode
+// components frequently have `name: 'section'` with `settings.tag: 'nav'`
+// (e.g. a user-added NAV component instance). Checking `name` alone misses
+// these and causes the nav's logo to be picked as the LCP candidate.
 const NON_LCP_ANCESTOR_NAMES = new Set(['header', 'footer', 'nav']);
+
+function isNonLcpAncestor(layer: Layer): boolean {
+  if (NON_LCP_ANCESTOR_NAMES.has(layer.name)) return true;
+  const tag = layer.settings?.tag;
+  if (typeof tag === 'string' && NON_LCP_ANCESTOR_NAMES.has(tag)) return true;
+  return false;
+}
 
 /**
  * Heuristic: is this resolved asset a vector graphic (SVG)?
@@ -499,24 +511,31 @@ export function computeImageSizes(
 
 /**
  * Find the LCP (Largest Contentful Paint) candidate for a given page tree.
- * Walks the tree in render order and returns the first `image`-named layer that:
- *   - is NOT a descendant of a `header`, `footer`, or `nav` layer (logos),
+ * Walks the whole tree and returns the qualifying image with the **largest
+ * intrinsic area** — Lighthouse's actual LCP heuristic. Earlier versions
+ * returned the first matching image in render order, which caused a 300px
+ * logo (inside an unlabelled nav component) to be preferred over a 1920px
+ * hero further down the tree, leaving the real LCP image lazy-loaded.
+ *
+ * An image qualifies when it:
+ *   - is NOT a descendant of a header/footer/nav layer (by `layer.name` OR
+ *     `layer.settings.tag` — see `isNonLcpAncestor`),
  *   - is NOT backed by an SVG asset (vector logos / icons), and
  *   - has an effective intrinsic width unknown or at least `minWidth` pixels.
  *
- * Width resolution order:
- *   1. `layer.attributes.width` (parsed as int)
- *   2. Asset record width via `resolvedAssets[assetId]`
- *   3. Unknown — treat as candidate (best effort)
+ * Width / area resolution order:
+ *   1. `layer.attributes.width` × `layer.attributes.height` (parsed as int)
+ *   2. Asset record dimensions via `resolvedAssets[assetId]`
+ *   3. Unknown — treat as a low-priority candidate (best effort).
  *
  * Returns null if no qualifying image exists in the tree.
  */
 export function findLcpCandidate(
   layers: Layer[],
-  resolvedAssets?: Record<string, { width?: number | null; mimeType?: string | null; url?: string | null }>,
+  resolvedAssets?: Record<string, { width?: number | null; height?: number | null; mimeType?: string | null; url?: string | null }>,
   minWidth: number = 200
 ): LcpCandidate | null {
-  const parseWidth = (value: unknown): number | null => {
+  const parseInt = (value: unknown): number | null => {
     if (typeof value === 'number' && !isNaN(value)) return value;
     if (typeof value !== 'string') return null;
     const match = value.match(/^\s*(\d+(?:\.\d+)?)/);
@@ -525,8 +544,10 @@ export function findLcpCandidate(
     return isNaN(n) ? null : n;
   };
 
-  const visit = (layer: Layer, inNonLcpAncestor: boolean): LcpCandidate | null => {
-    const inNonLcp = inNonLcpAncestor || NON_LCP_ANCESTOR_NAMES.has(layer.name);
+  let best: { candidate: LcpCandidate; area: number } | null = null;
+
+  const visit = (layer: Layer, inNonLcpAncestor: boolean): void => {
+    const inNonLcp = inNonLcpAncestor || isNonLcpAncestor(layer);
 
     if (layer.name === 'image' && !inNonLcp) {
       const srcVar = layer.variables?.image?.src;
@@ -543,33 +564,37 @@ export function findLcpCandidate(
       const isSvg = isSvgAsset(asset) || (inlineUrl ? isSvgUrl(inlineUrl) : false);
 
       if (!isSvg) {
-        let width = parseWidth(layer.attributes?.width);
-        if (width === null && asset?.width) {
-          width = asset.width as number;
-        }
+        let width = parseInt(layer.attributes?.width);
+        let height = parseInt(layer.attributes?.height);
+        if (width === null && asset?.width) width = asset.width as number;
+        if (height === null && asset?.height) height = asset.height as number;
 
         if (width === null || width >= minWidth) {
-          return { layerId: layer.id, assetId: assetId || undefined, layer };
+          // Unknown-size candidate gets area = 0 so any sized image beats it.
+          // Among sized images, the larger area wins (matches Lighthouse LCP).
+          const area = (width ?? 0) * (height ?? 0);
+          if (!best || area > best.area) {
+            best = {
+              candidate: { layerId: layer.id, assetId: assetId || undefined, layer },
+              area,
+            };
+          }
         }
       }
     }
 
     if (layer.children) {
       for (const child of layer.children) {
-        const found = visit(child, inNonLcp);
-        if (found) return found;
+        visit(child, inNonLcp);
       }
     }
-
-    return null;
   };
 
   for (const layer of layers) {
-    const found = visit(layer, false);
-    if (found) return found;
+    visit(layer, false);
   }
 
-  return null;
+  return best ? (best as { candidate: LcpCandidate }).candidate : null;
 }
 
 /** @deprecated Use {@link findLcpCandidate}. Kept for callers that only need the id. */
