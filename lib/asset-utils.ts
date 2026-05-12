@@ -504,18 +504,40 @@ export function computeImageSizes(
     return `${Math.min(constrainedWidth, widthForSizes || constrainedWidth)}px`;
   }
   if (widthForSizes) {
+    // Small images (avatars, icons, inline thumbs) don't scale to 100vw on
+    // mobile — they stay at their declared pixel size. Emitting the usual
+    // `(max-width: 768px) 100vw, Npx` for a 32px avatar makes the browser
+    // pick the largest srcset variant on mobile (29 KB wasted in one PSI
+    // case for a 84×56 rendered avatar). Threshold: 200px ≈ half the
+    // narrowest common phone viewport.
+    if (widthForSizes <= 200) {
+      return `${widthForSizes}px`;
+    }
     return `(max-width: 768px) 100vw, ${widthForSizes}px`;
   }
   return getImageSizes();
 }
 
+/** Layer classes signalling a full-bleed image — strongest LCP signal. */
+const FULL_BLEED_CLASS_RE = /\b(?:w-full|w-screen|w-\[100%\])\b/;
+
+/** Layer classes signalling a constrained (often portrait) image — weak LCP signal. */
+const CONSTRAINED_CLASS_RE = /\bmax-h-\[/;
+
 /**
  * Find the LCP (Largest Contentful Paint) candidate for a given page tree.
- * Walks the whole tree and returns the qualifying image with the **largest
- * intrinsic area** — Lighthouse's actual LCP heuristic. Earlier versions
- * returned the first matching image in render order, which caused a 300px
- * logo (inside an unlabelled nav component) to be preferred over a 1920px
- * hero further down the tree, leaving the real LCP image lazy-loaded.
+ *
+ * Scoring (tiered, highest tier wins; ties broken by intrinsic area):
+ *   tier 2 — image with `w-full` / `w-[100%]` / `w-screen` classes
+ *            (full-bleed hero pattern — almost always the LCP on mobile)
+ *   tier 1 — image with no `max-h-[...]` constraint
+ *   tier 0 — anything else (constrained portraits etc.)
+ *
+ * This replaces the older "first qualifying image" and "largest intrinsic
+ * area" heuristics — both picked the wrong image when a tall constrained
+ * portrait (e.g. 751×1546 app screenshot with `max-h-[600px] object-contain`)
+ * lived earlier in the tree or had bigger intrinsic dimensions than the real
+ * hero (a 800×800 square rendered full-bleed via `w-[100%] object-cover`).
  *
  * An image qualifies when it:
  *   - is NOT a descendant of a header/footer/nav layer (by `layer.name` OR
@@ -535,7 +557,7 @@ export function findLcpCandidate(
   resolvedAssets?: Record<string, { width?: number | null; height?: number | null; mimeType?: string | null; url?: string | null }>,
   minWidth: number = 200
 ): LcpCandidate | null {
-  const parseInt = (value: unknown): number | null => {
+  const parseDimension = (value: unknown): number | null => {
     if (typeof value === 'number' && !isNaN(value)) return value;
     if (typeof value !== 'string') return null;
     const match = value.match(/^\s*(\d+(?:\.\d+)?)/);
@@ -544,7 +566,13 @@ export function findLcpCandidate(
     return isNaN(n) ? null : n;
   };
 
-  let best: { candidate: LcpCandidate; area: number } | null = null;
+  const scoreClasses = (classes: string): number => {
+    if (FULL_BLEED_CLASS_RE.test(classes)) return 2;
+    if (CONSTRAINED_CLASS_RE.test(classes)) return 0;
+    return 1;
+  };
+
+  let best: { candidate: LcpCandidate; tier: number; area: number } | null = null;
 
   const visit = (layer: Layer, inNonLcpAncestor: boolean): void => {
     const inNonLcp = inNonLcpAncestor || isNonLcpAncestor(layer);
@@ -564,18 +592,27 @@ export function findLcpCandidate(
       const isSvg = isSvgAsset(asset) || (inlineUrl ? isSvgUrl(inlineUrl) : false);
 
       if (!isSvg) {
-        let width = parseInt(layer.attributes?.width);
-        let height = parseInt(layer.attributes?.height);
+        let width = parseDimension(layer.attributes?.width);
+        let height = parseDimension(layer.attributes?.height);
         if (width === null && asset?.width) width = asset.width as number;
         if (height === null && asset?.height) height = asset.height as number;
 
         if (width === null || width >= minWidth) {
-          // Unknown-size candidate gets area = 0 so any sized image beats it.
-          // Among sized images, the larger area wins (matches Lighthouse LCP).
+          const classesStr = typeof layer.classes === 'string'
+            ? layer.classes
+            : Array.isArray(layer.classes) ? layer.classes.join(' ') : '';
+          const tier = scoreClasses(classesStr);
           const area = (width ?? 0) * (height ?? 0);
-          if (!best || area > best.area) {
+
+          // Higher tier always wins. Within a tier, larger intrinsic area wins.
+          if (
+            !best
+            || tier > best.tier
+            || (tier === best.tier && area > best.area)
+          ) {
             best = {
               candidate: { layerId: layer.id, assetId: assetId || undefined, layer },
+              tier,
               area,
             };
           }
