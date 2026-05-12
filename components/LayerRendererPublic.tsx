@@ -22,7 +22,7 @@ import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getStaticTextContent, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { isValidLinkSettings, generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, type LinkResolutionContext } from '@/lib/link-utils';
-import { DEFAULT_ASSETS, generateImageSrcset, getImageSizes, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { DEFAULT_ASSETS, computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { renderRichText, hasBlockElementsWithInlineVariables, getTextStyleClasses, flattenTiptapParagraphs, type RichTextLinkContext, type RenderComponentBlockFn } from '@/lib/text-format-utils';
 import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper';
@@ -964,17 +964,7 @@ const LayerItem: React.FC<{
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 85);
       const srcset = generateImageSrcset(finalImageUrl);
-
-      // Prefer an explicit `sizes` attribute. Otherwise, if we have an
-      // intrinsic pixel width, emit a media-aware sizes string so browsers
-      // download a more appropriately sized variant on desktop. Falls back
-      // to `100vw` when width is unknown.
-      const explicitSizes = (layer.attributes?.sizes as string | undefined)?.trim();
-      const widthForSizes = imgWidth && /^\d+(\.\d+)?(px)?$/i.test(imgWidth)
-        ? imgWidth.replace(/px$/i, '')
-        : null;
-      const sizes = explicitSizes
-        || (widthForSizes ? `(max-width: 768px) 100vw, ${widthForSizes}px` : getImageSizes());
+      const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 
       const imageProps: Record<string, any> = {
         ...elementProps,

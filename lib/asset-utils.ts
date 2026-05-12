@@ -430,6 +430,71 @@ export interface LcpCandidate {
   layerId: string;
   /** Asset id of the candidate image, when backed by a static asset variable. */
   assetId?: string;
+  /**
+   * The matched layer reference. Callers (e.g. PageRenderer's LCP preload tag)
+   * need this to compute a `sizes` attribute that matches what the renderer
+   * will emit for the same `<img>` — otherwise the preload picks one srcset
+   * variant and the rendered img picks another, wasting the preload entirely.
+   */
+  layer?: Layer;
+}
+
+/**
+ * Compute the responsive `sizes` attribute for an image layer.
+ *
+ * Mirrors the heuristics used by both `LayerRenderer` and `LayerRendererPublic`
+ * so the rendered `<img sizes>` and any matching `<link rel=preload imageSizes>`
+ * stay byte-identical. Mismatched sizes are the most common reason an LCP
+ * preload silently fails: the browser fetches one variant for the preload
+ * and a different one for the img, and the preload bytes are discarded.
+ *
+ * Rules, in order:
+ *   1. Explicit `layer.attributes.sizes` wins.
+ *   2. Portrait + max-h-[...] + object-contain → the visible width can never
+ *      exceed `maxH × intrinsicAspect`, so emit one hard pixel size.
+ *   3. Known pixel width → `(max-width: 768px) 100vw, ${width}px` so mobile
+ *      still gets 100vw but desktop downloads the right variant.
+ *   4. Fall back to `100vw`.
+ */
+export function computeImageSizes(
+  layerAttributes: Record<string, unknown> | undefined,
+  classesString: string,
+  imgWidth: string | undefined,
+  imgHeight: string | undefined
+): string {
+  const parsePixels = (value: string): number | null => {
+    const m = value.match(/^\s*(\d+(?:\.\d+)?)\s*(px|rem|em)?\s*$/i);
+    if (!m) return null;
+    return Math.round(parseFloat(m[1]) * ((m[2] || 'px').toLowerCase() === 'px' ? 1 : 16));
+  };
+
+  const sizesAttr = layerAttributes?.sizes;
+  const explicitSizes = typeof sizesAttr === 'string' ? sizesAttr.trim() : '';
+  if (explicitSizes) return explicitSizes;
+
+  const widthForSizes = imgWidth ? parsePixels(imgWidth) : null;
+  const intrinsicH = imgHeight ? parsePixels(imgHeight) : null;
+
+  let constrainedWidth: number | null = null;
+  if (
+    widthForSizes && intrinsicH && intrinsicH > widthForSizes
+    && classesString.includes('object-contain')
+  ) {
+    const maxHMatch = classesString.match(/max-h-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/);
+    if (maxHMatch) {
+      const maxH = parseFloat(maxHMatch[1])
+        * ((maxHMatch[2] || 'px').toLowerCase() === 'px' ? 1 : 16);
+      constrainedWidth = Math.ceil(maxH * (widthForSizes / intrinsicH));
+    }
+  }
+
+  if (constrainedWidth) {
+    return `${Math.min(constrainedWidth, widthForSizes || constrainedWidth)}px`;
+  }
+  if (widthForSizes) {
+    return `(max-width: 768px) 100vw, ${widthForSizes}px`;
+  }
+  return getImageSizes();
 }
 
 /**
@@ -484,7 +549,7 @@ export function findLcpCandidate(
         }
 
         if (width === null || width >= minWidth) {
-          return { layerId: layer.id, assetId: assetId || undefined };
+          return { layerId: layer.id, assetId: assetId || undefined, layer };
         }
       }
     }

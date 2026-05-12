@@ -22,7 +22,7 @@ import { DEFAULT_ASSETS, ASSET_CATEGORIES, isAssetOfType } from '@/lib/asset-uti
 import { parseMultiAssetFieldValue, buildAssetVirtualValues } from '@/lib/multi-asset-utils';
 import { parseMultiReferenceValue, resolveReferenceFieldsSync } from '@/lib/collection-utils';
 import { MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
-import { generateImageSrcset, getImageSizes, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { toast } from 'sonner';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
@@ -2149,45 +2149,7 @@ const LayerItem: React.FC<{
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 85);
       const srcset = generateImageSrcset(finalImageUrl);
-
-      // Prefer an explicit `sizes` attribute. Otherwise, if we have a
-      // pixel-resolvable width (px, rem, em — em/rem assumed against the
-      // 16px root), emit a media-aware sizes string so browsers download
-      // a more appropriately sized variant. Falls back to `100vw` when
-      // width is unknown or expressed as %/vw/etc.
-      const parsePixels = (value: string): number | null => {
-        const m = value.match(/^\s*(\d+(?:\.\d+)?)\s*(px|rem|em)?\s*$/i);
-        if (!m) return null;
-        return Math.round(parseFloat(m[1]) * ((m[2] || 'px').toLowerCase() === 'px' ? 1 : 16));
-      };
-      const explicitSizes = (layer.attributes?.sizes as string | undefined)?.trim();
-      const widthForSizes = imgWidth ? parsePixels(imgWidth) : null;
-
-      // Heuristic for portrait images that are bounded by a pixel max-height
-      // and use object-contain: the rendered width can never exceed
-      // `maxH × intrinsicAspect`, so 100vw on mobile and the intrinsic width
-      // on desktop both over-state the slot. Emit a single hard pixel size
-      // that the browser uses to pick the smallest sufficient srcset entry.
-      const intrinsicH = imgHeight ? parsePixels(imgHeight) : null;
-      let constrainedWidth: number | null = null;
-      if (
-        widthForSizes && intrinsicH && intrinsicH > widthForSizes
-        && classesString.includes('object-contain')
-      ) {
-        const maxHMatch = classesString.match(/max-h-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/);
-        if (maxHMatch) {
-          const maxH = parseFloat(maxHMatch[1])
-            * ((maxHMatch[2] || 'px').toLowerCase() === 'px' ? 1 : 16);
-          constrainedWidth = Math.ceil(maxH * (widthForSizes / intrinsicH));
-        }
-      }
-
-      const sizes = explicitSizes
-        || (constrainedWidth
-          ? `${Math.min(constrainedWidth, widthForSizes || constrainedWidth)}px`
-          : widthForSizes
-            ? `(max-width: 768px) 100vw, ${widthForSizes}px`
-            : getImageSizes());
+      const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 
       const imageProps: Record<string, any> = {
         ...elementProps,

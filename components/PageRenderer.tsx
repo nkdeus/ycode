@@ -12,7 +12,7 @@ import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
-import { collectLayerAssetIds, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getImageSizes, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { collectLayerAssetIds, computeImageSizes, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
@@ -510,9 +510,20 @@ export default async function PageRenderer({
     if (candidateAsset?.url) {
       lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, 85);
       lcpPreloadSrcset = generateImageSrcset(candidateAsset.url) || null;
-      lcpPreloadSizes = candidateAsset.width
-        ? `(max-width: 768px) 100vw, ${candidateAsset.width}px`
-        : getImageSizes();
+      // Use the SAME sizes string the renderer will emit on the <img>. If
+      // these diverge, the browser fetches one srcset variant via preload
+      // and a different one via the img tag — preload bytes are wasted.
+      const lcpLayer = lcpCandidate.layer;
+      const layerWidthAttr = lcpLayer?.attributes?.width;
+      const layerHeightAttr = lcpLayer?.attributes?.height;
+      const imgWidth = layerWidthAttr != null
+        ? String(layerWidthAttr)
+        : (candidateAsset.width ? String(candidateAsset.width) : undefined);
+      const imgHeight = layerHeightAttr != null
+        ? String(layerHeightAttr)
+        : (candidateAsset.height ? String(candidateAsset.height) : undefined);
+      const classesString = lcpLayer ? getClassesString(lcpLayer) : '';
+      lcpPreloadSizes = computeImageSizes(lcpLayer?.attributes, classesString, imgWidth, imgHeight);
     }
   }
 
