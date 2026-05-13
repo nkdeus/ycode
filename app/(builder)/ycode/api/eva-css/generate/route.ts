@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   getAppSettingValue,
 } from '@/lib/repositories/appSettingsRepository';
@@ -63,9 +64,21 @@ function extractClasses(layers: Layer[]): Set<string> {
   return classes;
 }
 
-/** Wrap Eva bridge CSS in marker comments */
+/** Short hash of the bridge CSS for cache-busting the external stylesheet */
+function hashBridge(css: string): string {
+  return createHash('sha1').update(css).digest('hex').slice(0, 10);
+}
+
+/**
+ * Wrap Eva bridge CSS reference in marker comments.
+ *
+ * We emit a <link> to /eva-bridge.css (served by app/(site)/eva-bridge.css/route.ts)
+ * with a hashed query string for immutable caching, instead of inlining the full
+ * <style> block in every page's <head>.
+ */
 function wrapBridge(css: string): string {
-  return `${EVA_MARKER_START}\n<style id="eva-bridge">\n${css}\n</style>\n${EVA_MARKER_END}\n`;
+  const hash = hashBridge(css);
+  return `${EVA_MARKER_START}\n<link rel="stylesheet" href="/eva-bridge.css?v=${hash}">\n${EVA_MARKER_END}\n`;
 }
 
 /** Strip existing Eva block from a custom code string */

@@ -78,3 +78,7 @@ update-eva-temp.*
 
 # local claude settings
 .claude/settings.local.json
+
+# SEO audit (local only, not for git)
+audit-seo/
+audit-temoignages/

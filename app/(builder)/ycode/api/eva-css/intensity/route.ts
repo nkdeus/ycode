@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import {
   getAppSettingValue,
   setAppSetting,
@@ -110,11 +111,14 @@ export async function POST(request: NextRequest) {
 
       await setSetting('eva_bridge_css', updated);
 
-      // Also update custom_code_head
+      // Also update custom_code_head — emit a hashed <link> to /eva-bridge.css
+      // (served from app/(site)/eva-bridge.css/route.ts) instead of inlining
+      // the full <style> block in every published page.
       const head =
         ((await getSettingByKey('custom_code_head')) as string) || '';
       const cleanedHead = head.replace(EVA_MARKER_REGEX, '').trim();
-      const block = `${EVA_MARKER_START}\n<style id="eva-bridge">\n${updated}\n</style>\n${EVA_MARKER_END}\n`;
+      const hash = createHash('sha1').update(updated).digest('hex').slice(0, 10);
+      const block = `${EVA_MARKER_START}\n<link rel="stylesheet" href="/eva-bridge.css?v=${hash}">\n${EVA_MARKER_END}\n`;
       const newHead = cleanedHead ? `${block}\n${cleanedHead}` : block;
       await setSetting('custom_code_head', newHead);
     }
