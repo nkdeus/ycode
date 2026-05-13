@@ -451,73 +451,6 @@ export interface LcpCandidate {
   layer?: Layer;
 }
 
-/**
- * Compute the responsive `sizes` attribute for an image layer.
- *
- * Mirrors the heuristics used by both `LayerRenderer` and `LayerRendererPublic`
- * so the rendered `<img sizes>` and any matching `<link rel=preload imageSizes>`
- * stay byte-identical. Mismatched sizes are the most common reason an LCP
- * preload silently fails: the browser fetches one variant for the preload
- * and a different one for the img, and the preload bytes are discarded.
- *
- * Rules, in order:
- *   1. Explicit `layer.attributes.sizes` wins.
- *   2. Portrait + max-h-[...] + object-contain → the visible width can never
- *      exceed `maxH × intrinsicAspect`, so emit one hard pixel size.
- *   3. Known pixel width → `(max-width: 768px) 100vw, ${width}px` so mobile
- *      still gets 100vw but desktop downloads the right variant.
- *   4. Fall back to `100vw`.
- */
-export function computeImageSizes(
-  layerAttributes: Record<string, unknown> | undefined,
-  classesString: string,
-  imgWidth: string | undefined,
-  imgHeight: string | undefined
-): string {
-  const parsePixels = (value: string): number | null => {
-    const m = value.match(/^\s*(\d+(?:\.\d+)?)\s*(px|rem|em)?\s*$/i);
-    if (!m) return null;
-    return Math.round(parseFloat(m[1]) * ((m[2] || 'px').toLowerCase() === 'px' ? 1 : 16));
-  };
-
-  const sizesAttr = layerAttributes?.sizes;
-  const explicitSizes = typeof sizesAttr === 'string' ? sizesAttr.trim() : '';
-  if (explicitSizes) return explicitSizes;
-
-  const widthForSizes = imgWidth ? parsePixels(imgWidth) : null;
-  const intrinsicH = imgHeight ? parsePixels(imgHeight) : null;
-
-  let constrainedWidth: number | null = null;
-  if (
-    widthForSizes && intrinsicH && intrinsicH > widthForSizes
-    && classesString.includes('object-contain')
-  ) {
-    const maxHMatch = classesString.match(/max-h-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/);
-    if (maxHMatch) {
-      const maxH = parseFloat(maxHMatch[1])
-        * ((maxHMatch[2] || 'px').toLowerCase() === 'px' ? 1 : 16);
-      constrainedWidth = Math.ceil(maxH * (widthForSizes / intrinsicH));
-    }
-  }
-
-  if (constrainedWidth) {
-    return `${Math.min(constrainedWidth, widthForSizes || constrainedWidth)}px`;
-  }
-  if (widthForSizes) {
-    // Small images (avatars, icons, inline thumbs) don't scale to 100vw on
-    // mobile — they stay at their declared pixel size. Emitting the usual
-    // `(max-width: 768px) 100vw, Npx` for a 32px avatar makes the browser
-    // pick the largest srcset variant on mobile (29 KB wasted in one PSI
-    // case for a 84×56 rendered avatar). Threshold: 200px ≈ half the
-    // narrowest common phone viewport.
-    if (widthForSizes <= 200) {
-      return `${widthForSizes}px`;
-    }
-    return `(max-width: 768px) 100vw, ${widthForSizes}px`;
-  }
-  return getImageSizes();
-}
-
 // Class boundary anchors. `\b` does NOT match around `[` / `]` (both are
 // non-word characters), so `\bw-\[100%\]\b` silently fails to match the
 // Tailwind arbitrary-value class `w-[100%]` — the trailing `\b` falls between
@@ -542,6 +475,93 @@ const OBJECT_CONTAIN_RE = new RegExp(`${CLASS_BOUNDARY_START}object-contain${CLA
 
 /** Layer classes signalling a constrained (often portrait) image — weak LCP signal. */
 const CONSTRAINED_CLASS_RE = new RegExp(`${CLASS_BOUNDARY_START}max-h-\\[`);
+
+/**
+ * Compute the responsive `sizes` attribute for an image layer.
+ *
+ * Mirrors the heuristics used by both `LayerRenderer` and `LayerRendererPublic`
+ * so the rendered `<img sizes>` and any matching `<link rel=preload imageSizes>`
+ * stay byte-identical. Mismatched sizes are the most common reason an LCP
+ * preload silently fails: the browser fetches one variant for the preload
+ * and a different one for the img, and the preload bytes are discarded.
+ *
+ * Rules, in order:
+ *   1. Explicit `layer.attributes.sizes` wins.
+ *   2. Portrait + max-h-[...] + object-contain → the visible width can never
+ *      exceed `maxH × intrinsicAspect`, so emit one hard pixel size.
+ *   3. Portrait + `w-full` + `object-contain` with no max-h → almost always a
+ *      column-fit screenshot/mockup (e.g. the homepage hero's phone screenshot
+ *      in a 2-col grid). The intrinsic width is the asset's source resolution
+ *      (commonly 750–1500px), NOT the rendered desktop width — using it
+ *      makes the browser fetch a variant 30–50% larger than the visible
+ *      pixels. PSI flagged this on the EasyStay hero with a 750×1546 mockup
+ *      that displays at ~470px: srcset hint of 751px → 750w variant (78 KiB),
+ *      vs. column-fit hint → 640w variant (52 KiB). Cap the desktop hint at
+ *      the typical half-grid column width (~600 CSS px on a 1280-max content
+ *      grid).
+ *   4. Known pixel width → `(max-width: 768px) 100vw, ${width}px` so mobile
+ *      still gets 100vw but desktop downloads the right variant.
+ *   5. Fall back to `100vw`.
+ */
+export function computeImageSizes(
+  layerAttributes: Record<string, unknown> | undefined,
+  classesString: string,
+  imgWidth: string | undefined,
+  imgHeight: string | undefined
+): string {
+  const parsePixels = (value: string): number | null => {
+    const m = value.match(/^\s*(\d+(?:\.\d+)?)\s*(px|rem|em)?\s*$/i);
+    if (!m) return null;
+    return Math.round(parseFloat(m[1]) * ((m[2] || 'px').toLowerCase() === 'px' ? 1 : 16));
+  };
+
+  const sizesAttr = layerAttributes?.sizes;
+  const explicitSizes = typeof sizesAttr === 'string' ? sizesAttr.trim() : '';
+  if (explicitSizes) return explicitSizes;
+
+  const widthForSizes = imgWidth ? parsePixels(imgWidth) : null;
+  const intrinsicH = imgHeight ? parsePixels(imgHeight) : null;
+  const isPortrait = !!(widthForSizes && intrinsicH && intrinsicH > widthForSizes);
+  const hasObjectContain = OBJECT_CONTAIN_RE.test(classesString);
+  const hasFullBleed = FULL_BLEED_CLASS_RE.test(classesString);
+
+  let constrainedWidth: number | null = null;
+  if (isPortrait && hasObjectContain) {
+    const maxHMatch = classesString.match(/max-h-\[(\d+(?:\.\d+)?)(px|rem|em)?\]/);
+    if (maxHMatch) {
+      const maxH = parseFloat(maxHMatch[1])
+        * ((maxHMatch[2] || 'px').toLowerCase() === 'px' ? 1 : 16);
+      constrainedWidth = Math.ceil(maxH * ((widthForSizes as number) / (intrinsicH as number)));
+    }
+  }
+
+  if (constrainedWidth) {
+    return `${Math.min(constrainedWidth, widthForSizes || constrainedWidth)}px`;
+  }
+
+  // Portrait w-full object-contain images are column-fit screenshots, never
+  // full-bleed at intrinsic width. Anchor the desktop hint at the half-grid
+  // column width to keep the browser from picking the next-larger variant.
+  if (isPortrait && hasObjectContain && hasFullBleed) {
+    const COLUMN_WIDTH_PX = 600;
+    const desktopHint = Math.min(widthForSizes as number, COLUMN_WIDTH_PX);
+    return `(max-width: 768px) 100vw, ${desktopHint}px`;
+  }
+
+  if (widthForSizes) {
+    // Small images (avatars, icons, inline thumbs) don't scale to 100vw on
+    // mobile — they stay at their declared pixel size. Emitting the usual
+    // `(max-width: 768px) 100vw, Npx` for a 32px avatar makes the browser
+    // pick the largest srcset variant on mobile (29 KB wasted in one PSI
+    // case for a 84×56 rendered avatar). Threshold: 200px ≈ half the
+    // narrowest common phone viewport.
+    if (widthForSizes <= 200) {
+      return `${widthForSizes}px`;
+    }
+    return `(max-width: 768px) 100vw, ${widthForSizes}px`;
+  }
+  return getImageSizes();
+}
 
 /**
  * Find the LCP (Largest Contentful Paint) candidate for a given page tree.
