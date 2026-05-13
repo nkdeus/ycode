@@ -49,6 +49,143 @@ const LocaleSelector = dynamic(() => import('@/components/layers/LocaleSelector'
 const AnimationInitializer = dynamic(() => import('@/components/AnimationInitializer'));
 const FilterLayerBehavior = dynamic(() => import('@/components/FilterLayerBehavior'));
 
+// Map common social/known hostnames to friendly accessible-name labels.
+// Used as a fallback when an icon-only link has no text content and no
+// explicit aria-label — Lighthouse / axe both flag those as missing an
+// accessible name. The mapping is deliberately small: only hostnames where
+// the user-facing meaning is unambiguous (TikTok, Instagram, etc.). Unknown
+// hostnames fall back to the bare hostname (e.g. "shop.example.com"),
+// which is still better than no name at all.
+const HOSTNAME_ARIA_LABELS: Record<string, string> = {
+  'tiktok.com': 'TikTok',
+  'instagram.com': 'Instagram',
+  'facebook.com': 'Facebook',
+  'fb.com': 'Facebook',
+  'twitter.com': 'Twitter',
+  'x.com': 'X',
+  'youtube.com': 'YouTube',
+  'youtu.be': 'YouTube',
+  'linkedin.com': 'LinkedIn',
+  'github.com': 'GitHub',
+  'pinterest.com': 'Pinterest',
+  'snapchat.com': 'Snapchat',
+  'whatsapp.com': 'WhatsApp',
+  'wa.me': 'WhatsApp',
+  'telegram.org': 'Telegram',
+  't.me': 'Telegram',
+  'discord.com': 'Discord',
+  'discord.gg': 'Discord',
+  'spotify.com': 'Spotify',
+  'twitch.tv': 'Twitch',
+  'reddit.com': 'Reddit',
+  'medium.com': 'Medium',
+  'vimeo.com': 'Vimeo',
+  'soundcloud.com': 'SoundCloud',
+  'github.io': 'GitHub',
+  'dribbble.com': 'Dribbble',
+  'behance.net': 'Behance',
+};
+
+/**
+ * Derive an accessible name for an icon-only link from its href.
+ * - tel:/mailto:/sms: → "Phone" / "Email" / "SMS"
+ * - http(s) URL → mapped hostname (TikTok, Instagram, …) or bare hostname
+ * Returns undefined for hrefs we can't classify (anchor links, relative
+ * paths) — better to leave aria-label off than to label "#hero" as "#hero".
+ */
+function ariaLabelFromHref(href: string | undefined): string | undefined {
+  if (!href || typeof href !== 'string') return undefined;
+  if (href.startsWith('tel:')) return 'Phone';
+  if (href.startsWith('mailto:')) return 'Email';
+  if (href.startsWith('sms:')) return 'SMS';
+  if (!/^https?:\/\//i.test(href)) return undefined;
+  try {
+    const hostname = new URL(href).hostname.replace(/^www\./, '').toLowerCase();
+    return HOSTNAME_ARIA_LABELS[hostname] || hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort: extract the asset slug from a YCode proxy URL (`/a/{hash}/{slug}.{ext}`)
+ * and turn it into a human-readable label. Used as a fallback aria-label
+ * for icon-only buttons / internal-link buttons that have no other
+ * accessible-name signal.
+ */
+function ariaLabelFromAssetUrl(url: string | undefined): string | undefined {
+  if (!url || typeof url !== 'string') return undefined;
+  const m = url.match(/^\/a\/[^/]+\/([^/?#]+?)(?:\.[a-z0-9]+)?(?:[?#]|$)/i);
+  if (!m) return undefined;
+  const slug = m[1];
+  // Reject slugs that look like noise (uuid-ish or pure digits) — labelling
+  // a button "00ab12cd" is no better than no label for a screen reader.
+  if (/^[0-9]+$/.test(slug)) return undefined;
+  if (/^[0-9a-f-]{16,}$/i.test(slug)) return undefined;
+  const label = slug.replace(/[-_]+/g, ' ').trim();
+  if (!label) return undefined;
+  // Capitalize first letter for nicer screen-reader pronunciation.
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+/**
+ * Walk a layer subtree to find the first descendant `icon` layer that
+ * references a static asset, returning the asset id for accessible-name
+ * derivation. Stops at the first match — for icon-only buttons we only
+ * need one signal, and walking further wastes work.
+ */
+function findDescendantIconAssetId(layers: Layer[] | undefined): string | undefined {
+  if (!layers?.length) return undefined;
+  const queue: Layer[] = [...layers];
+  while (queue.length) {
+    const layer = queue.shift()!;
+    if (layer.name === 'icon') {
+      const src = layer.variables?.icon?.src;
+      if (isAssetVariable(src)) {
+        const id = getAssetId(src);
+        if (id) return id;
+      }
+    }
+    if (layer.children?.length) queue.push(...layer.children);
+  }
+  return undefined;
+}
+
+/**
+ * True if the layer subtree will render any user-visible text. Used to
+ * decide whether an interactive element (button / link) needs a synthesized
+ * aria-label. We DON'T look at the icon layer's content — SVG glyphs are
+ * not announced by screen readers, so their presence doesn't count as an
+ * accessible name.
+ */
+function subtreeHasVisibleText(layers: Layer[] | undefined): boolean {
+  if (!layers?.length) return false;
+  const queue: Layer[] = [...layers];
+  while (queue.length) {
+    const layer = queue.shift()!;
+    if (layer.settings?.hidden || layer.hiddenGenerated) continue;
+    if (layer.name === 'text' || layer.name === 'heading' || layer.name === 'richText') {
+      const textVar = layer.variables?.text;
+      if (textVar && 'data' in textVar) {
+        const content = (textVar as any).data?.content;
+        if (typeof content === 'string' && content.trim()) return true;
+        if (content && typeof content === 'object') {
+          // Tiptap doc — scan for any text node with non-empty `text`.
+          const scan = (node: any): boolean => {
+            if (!node) return false;
+            if (typeof node.text === 'string' && node.text.trim()) return true;
+            if (Array.isArray(node.content)) return node.content.some(scan);
+            return false;
+          };
+          if (scan(content)) return true;
+        }
+      }
+    }
+    if (layer.children?.length) queue.push(...layer.children);
+  }
+  return false;
+}
+
 /** True if any layer in the tree has at least one interaction configured. */
 function layerTreeHasInteractions(layers: Layer[]): boolean {
   for (const layer of layers) {
@@ -917,6 +1054,40 @@ const LayerItem: React.FC<{
       Object.entries(layer.settings.customAttributes).forEach(([name, value]) => {
         elementProps[name] = value;
       });
+    }
+
+    // Synthesize an accessible name for icon-only buttons/links. Lighthouse
+    // and axe flag both "button-name" and "link-name" when an interactive
+    // element renders without a text node, an aria-label, an aria-labelledby,
+    // or a title attribute. YCode pages built from native components hit
+    // this constantly — social icon links, hamburger menus, close buttons.
+    // We derive a best-effort label from:
+    //   - href (for <a>): "TikTok", "Instagram", "Phone", …
+    //   - descendant icon asset (for <button> / internal <a>): slug-derived
+    // The synthesized value only fills in when no explicit signal exists,
+    // so a user-provided aria-label / title / textContent always wins.
+    if (
+      (htmlTag === 'a' || htmlTag === 'button')
+      && !elementProps['aria-label']
+      && !elementProps['aria-labelledby']
+      && !elementProps.title
+      && !(typeof textContent === 'string' && textContent.trim())
+      && !subtreeHasVisibleText(effectiveLayer.children)
+    ) {
+      let synthesized: string | undefined;
+      if (htmlTag === 'a') {
+        synthesized = ariaLabelFromHref(elementProps.href as string | undefined);
+      }
+      if (!synthesized) {
+        const iconAssetId = findDescendantIconAssetId(effectiveLayer.children);
+        if (iconAssetId) {
+          const asset = getAsset(iconAssetId);
+          if (asset?.public_url) {
+            synthesized = ariaLabelFromAssetUrl(asset.public_url);
+          }
+        }
+      }
+      if (synthesized) elementProps['aria-label'] = synthesized;
     }
 
     // Select with placeholder: set defaultValue so React shows the placeholder option
