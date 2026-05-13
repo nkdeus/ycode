@@ -396,6 +396,66 @@ export async function fetchGoogleFontsCss(urls: string[]): Promise<string> {
   }
 }
 
+/**
+ * Extract latin-subset woff2 URLs from inlined Google Fonts CSS so the caller
+ * can emit `<link rel="preload" as="font" crossorigin>` tags ahead of the
+ * Next.js CSS chunk that references the fonts.
+ *
+ * Without preloading, the critical request chain is:
+ *   HTML → next.js CSS chunk → woff2 (gstatic)
+ * because the @font-face rules in our inlined `<style>` are known at HTML
+ * parse time, but the browser doesn't trigger the font fetch until a CSS
+ * selector (in the next.js chunk) actually demands the family. PSI flagged
+ * this on the EasyStay home: 416ms LCP-critical chain, 165ms of which was
+ * the gap between the CSS chunk landing and the woff2 fetch starting.
+ *
+ * Latin filter: most pages render only ASCII text, so the browser fetches
+ * only the latin subset of each @font-face declaration. Other subsets
+ * (cyrillic, vietnamese, greek, latin-ext) are intentionally skipped to
+ * avoid wasting bandwidth on bytes the page never paints.
+ *
+ * The list is also capped at `maxUrls` (default 4) — even after narrowing
+ * to latin, a page using e.g. 4 weights × 2 italics still emits 8 URLs;
+ * preloading them all would re-introduce the very bandwidth waste this
+ * function is meant to avoid.
+ */
+export function extractLatinFontPreloads(css: string | undefined, maxUrls: number = 4): string[] {
+  if (!css) return [];
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const faceRegex = /@font-face\s*\{([^}]+)\}/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = faceRegex.exec(css)) !== null) {
+    const block = match[1];
+
+    const unicodeRangeMatch = block.match(/unicode-range\s*:\s*([^;]+)/i);
+    const unicodeRange = unicodeRangeMatch?.[1]?.trim() || '';
+
+    // Latin subset markers: U+0020 (ASCII space, almost always present in
+    // latin block), U+0000-00FF (Latin-1 supplement). A block with no
+    // unicode-range covers the whole font (older Google Fonts CSS, custom
+    // fonts) — treat as latin so we don't silently drop the only candidate.
+    const isLatin = !unicodeRange
+      || /U\+0000-00FF/i.test(unicodeRange)
+      || /U\+0020/i.test(unicodeRange);
+    if (!isLatin) continue;
+
+    const srcMatch = block.match(/src\s*:\s*url\(\s*([^)\s]+)\s*\)/i);
+    if (!srcMatch) continue;
+
+    const url = srcMatch[1].replace(/^["']|["']$/g, '');
+    if (seen.has(url)) continue;
+    seen.add(url);
+    urls.push(url);
+
+    if (urls.length >= maxUrls) break;
+  }
+
+  return urls;
+}
+
 /** Build CSS for custom fonts only (@font-face rules, no @import) */
 export function buildCustomFontsCss(fonts: Font[]): string {
   let css = '';

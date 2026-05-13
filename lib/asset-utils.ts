@@ -348,12 +348,12 @@ export function getOptimizedImageUrl(
  *
  * @example
  * generateImageSrcset('https://supabase.co/storage/v1/object/public/assets/image.jpg')
- * // Returns: 'https://.../image.jpg?width=320&quality=85 320w, https://.../image.jpg?width=480&quality=85 480w, ...'
+ * // Returns: 'https://.../image.jpg?width=320&quality=80 320w, https://.../image.jpg?width=480&quality=80 480w, ...'
  */
 export function generateImageSrcset(
   url: string,
   sizes: number[] = [320, 480, 640, 750, 828, 1080, 1280, 1536, 1920],
-  quality: number = 85
+  quality: number = 80
 ): string {
   if (!isTransformableUrl(url)) return '';
 

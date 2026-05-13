@@ -11,7 +11,7 @@ import { unstable_cache } from 'next/cache';
 import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
-import { buildCustomFontsCss, buildFontClassesCss, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
+import { buildCustomFontsCss, buildFontClassesCss, extractLatinFontPreloads, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
 import { collectLayerAssetIds, computeImageSizes, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
@@ -508,7 +508,7 @@ export default async function PageRenderer({
   if (lcpCandidate?.assetId && resolvedAssetsWithMime) {
     const candidateAsset = resolvedAssetsWithMime[lcpCandidate.assetId];
     if (candidateAsset?.url) {
-      lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, 85);
+      lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, 80);
       lcpPreloadSrcset = generateImageSrcset(candidateAsset.url) || null;
       // Use the SAME sizes string the renderer will emit on the <img>. If
       // these diverge, the browser fetches one srcset variant via preload
@@ -607,6 +607,22 @@ export default async function PageRenderer({
           />
         </>
       )}
+
+      {/* Preload the latin-subset woff2 URLs extracted from the inlined CSS.
+          Without this, the woff2 fetch waits for the next.js CSS chunk to
+          land and demand the font-family — chaining HTML → CSS → woff2 and
+          adding ~150-200ms to LCP-critical paths. Preload kicks the fetch
+          off during HTML parse, in parallel with the rest of the doc. */}
+      {googleFontsInlinedCss && extractLatinFontPreloads(googleFontsInlinedCss).map((href) => (
+        <link
+          key={href}
+          rel="preload"
+          as="font"
+          type="font/woff2"
+          href={href}
+          crossOrigin="anonymous"
+        />
+      ))}
 
       {/* Inline resolved @font-face rules when available — skips the blocking
           CSS request to fonts.googleapis.com. Falls back to <link

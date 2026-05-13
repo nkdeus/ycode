@@ -4161,7 +4161,7 @@ function layerToHtml(
         resolvedSrcValue = undefined;
       }
       if (resolvedSrcValue && resolvedSrcValue.trim()) {
-        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, 85);
+        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, 80);
         attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
 
         const srcset = generateImageSrcset(resolvedSrcValue);

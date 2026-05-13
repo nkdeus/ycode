@@ -962,7 +962,7 @@ const LayerItem: React.FC<{
       // whatever the user/template set.
       const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
 
-      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 85);
+      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 80);
       const srcset = generateImageSrcset(finalImageUrl);
       const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 

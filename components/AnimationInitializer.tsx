@@ -8,19 +8,72 @@
  * to prevent flickering. This component only handles animation triggers.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { SplitText } from 'gsap/SplitText';
+import type { ScrollTrigger as ScrollTriggerClass } from 'gsap/ScrollTrigger';
+import type { SplitText as SplitTextClass } from 'gsap/SplitText';
 
 import { buildGsapProps, addTweenToTimeline, createSplitTextAnimation, generateInitialAnimationCSS, setColorVariableResolver } from '@/lib/animation-utils';
 import { getCurrentBreakpoint } from '@/lib/breakpoint-utils';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import type { Layer, LayerInteraction, Breakpoint } from '@/types';
 
-// Register GSAP plugins
-if (typeof window !== 'undefined') {
-  gsap.registerPlugin(ScrollTrigger, SplitText);
+// Dynamically loaded GSAP plugin holders. Static imports would force every
+// page with any interaction to ship ~25 KiB (SplitText) + ~50 KiB (ScrollTrigger)
+// of plugin code even when those features aren't used. Both Lighthouse and
+// PSI flagged this as the largest unused-JS chunk on EasyStay's homepage.
+// We promote them to module scope (instead of refs) so `buildTimeline`,
+// which is module-level, can read whichever plugin instance the most
+// recent `loadGsapPlugins()` call resolved — no prop drilling, no
+// component-state ceremony.
+//
+// The variables are intentionally `let`: nullable at boot, populated after
+// the dynamic import resolves, then read by the main animation effect once
+// `pluginsReady` flips true.
+let ScrollTrigger: typeof ScrollTriggerClass | null = null;
+let SplitText: typeof SplitTextClass | null = null;
+
+async function loadGsapPlugins(needScrollTrigger: boolean, needSplitText: boolean): Promise<void> {
+  const tasks: Promise<unknown>[] = [];
+  if (needScrollTrigger && !ScrollTrigger) {
+    tasks.push(
+      import('gsap/ScrollTrigger').then((m) => {
+        ScrollTrigger = m.ScrollTrigger;
+        gsap.registerPlugin(m.ScrollTrigger);
+      })
+    );
+  }
+  if (needSplitText && !SplitText) {
+    tasks.push(
+      import('gsap/SplitText').then((m) => {
+        SplitText = m.SplitText;
+        gsap.registerPlugin(m.SplitText);
+      })
+    );
+  }
+  await Promise.all(tasks);
+}
+
+/** Walk the layer tree to detect whether any interaction needs ScrollTrigger. */
+function treeNeedsScrollTrigger(layers: Layer[]): boolean {
+  for (const layer of layers) {
+    if (layer.interactions?.some((i) => i.trigger === 'scroll-into-view' || i.trigger === 'while-scrolling')) {
+      return true;
+    }
+    if (layer.children && treeNeedsScrollTrigger(layer.children)) return true;
+  }
+  return false;
+}
+
+/** Walk the layer tree to detect whether any tween uses SplitText. */
+function treeNeedsSplitText(layers: Layer[]): boolean {
+  for (const layer of layers) {
+    if (layer.interactions?.some((i) => i.tweens?.some((t) => t.splitText))) {
+      return true;
+    }
+    if (layer.children && treeNeedsSplitText(layer.children)) return true;
+  }
+  return false;
 }
 
 interface AnimationInitializerProps {
@@ -138,8 +191,9 @@ function buildTimeline(interaction: LayerInteraction): gsap.core.Timeline | null
     displayEnd: string | null;
   }> = [];
 
-  // Track SplitText instances for cleanup
-  const splitTextInstances: SplitText[] = [];
+  // Track SplitText instances for cleanup. Typed via the imported class type;
+  // the actual class is loaded dynamically (see module-level `SplitText` let).
+  const splitTextInstances: InstanceType<typeof SplitTextClass>[] = [];
 
   // Track split elements per layer to reuse across multiple tweens
   const splitElementsCache = new Map<string, HTMLElement[]>();
@@ -175,7 +229,7 @@ function buildTimeline(interaction: LayerInteraction): gsap.core.Timeline | null
 
     // Apply split text if configured using GSAP's SplitText
     let splitElements: HTMLElement[] | undefined;
-    if (tween.splitText) {
+    if (tween.splitText && SplitText) {
       // Check if we've already split this element in this timeline
       const cacheKey = `${tween.layer_id}_${tween.splitText.type}`;
 
@@ -293,6 +347,33 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
   const [currentBreakpoint, setCurrentBreakpoint] = useState<Breakpoint>(() => getCurrentBreakpoint());
   const styleRef = useRef<HTMLStyleElement | null>(null);
 
+  const needScrollTrigger = useMemo(() => treeNeedsScrollTrigger(layers), [layers]);
+  const needSplitText = useMemo(() => treeNeedsSplitText(layers), [layers]);
+
+  // Block the main animation effect until the plugins this tree needs are
+  // loaded. We start "ready" when no plugin is required so on-load animations
+  // on plugin-free pages play with zero extra latency.
+  const [pluginsReady, setPluginsReady] = useState<boolean>(
+    () => !needScrollTrigger && !needSplitText
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!needScrollTrigger && !needSplitText) {
+      setPluginsReady(true);
+      return;
+    }
+
+    let canceled = false;
+    loadGsapPlugins(needScrollTrigger, needSplitText).then(() => {
+      if (!canceled) setPluginsReady(true);
+    });
+
+    return () => {
+      canceled = true;
+    };
+  }, [needScrollTrigger, needSplitText]);
+
   // Register a color variable resolver so backgroundColor tweens that
   // reference color variables (e.g. "color:var(--id)") can be resolved to a
   // concrete rgba value GSAP can interpolate.
@@ -340,6 +421,12 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
   }, []);
 
   useEffect(() => {
+    // Wait for any required GSAP plugins (ScrollTrigger / SplitText) before
+    // building timelines that depend on them. Elements with `on-load` tweens
+    // stay in their server-rendered initial state (via generateInitialAnimationCSS)
+    // until the plugin chunk resolves — typically <100ms in practice.
+    if (!pluginsReady) return;
+
     const collectedInteractions = collectInteractions(layers);
     const hiddenLayerInfo = collectHiddenLayerInfo(collectedInteractions);
     const isBreakpointChange = prevBreakpointRef.current !== null && prevBreakpointRef.current !== currentBreakpoint;
@@ -445,6 +532,7 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
         case 'scroll-into-view': {
           // Skip if breakpoint restriction not met
           if (!shouldRunOnBreakpoint(interaction, currentBreakpoint)) break;
+          if (!ScrollTrigger) break;
 
           const scrollStart = interaction.timeline?.scrollStart || 'top 80%';
           const toggleActions = interaction.timeline?.toggleActions || 'play none none none';
@@ -467,6 +555,7 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
         case 'while-scrolling': {
           // Skip if breakpoint restriction not met
           if (!shouldRunOnBreakpoint(interaction, currentBreakpoint)) break;
+          if (!ScrollTrigger) break;
 
           // Scrub animations require timeline upfront
           const timeline = getTimeline();
@@ -497,9 +586,9 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
     return () => {
       cleanups.forEach((cleanup) => cleanup());
       timelines.forEach((tl) => tl.kill());
-      ScrollTrigger.getAll().forEach((st) => st.kill());
+      ScrollTrigger?.getAll().forEach((st) => st.kill());
     };
-  }, [layers, currentBreakpoint]);
+  }, [layers, currentBreakpoint, pluginsReady]);
 
   return null;
 }
