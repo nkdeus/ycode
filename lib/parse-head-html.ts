@@ -67,6 +67,16 @@ export function renderRootLayoutHeadCode(html: string, prefix = 'global-head'): 
         key: `${prefix}-${idx++}`,
         ...reactAttrs,
       };
+      // External scripts without async/defer block HTML parsing and tank LCP.
+      // Default to `defer` (preserves execution order) unless the author
+      // opted-in to sync loading via data-ycode-block="true".
+      const hasSrc = 'src' in reactAttrs;
+      const hasAsync = 'async' in reactAttrs;
+      const hasDefer = 'defer' in reactAttrs;
+      const optOut = reactAttrs['data-ycode-block'] === 'true';
+      if (hasSrc && !hasAsync && !hasDefer && !optOut) {
+        props.defer = true;
+      }
       if (inner) {
         props.dangerouslySetInnerHTML = { __html: inner };
       }
