@@ -593,12 +593,22 @@ export function computeImageSizes(
   }
 
   // Portrait w-full object-contain images are column-fit screenshots, never
-  // full-bleed at intrinsic width. Anchor the desktop hint at the half-grid
-  // column width to keep the browser from picking the next-larger variant.
+  // full-bleed at intrinsic width. The image's rendered width is bounded by
+  // both the grid column AND the implicit height the row settles at — with
+  // a typical 0.5 aspect screenshot the visible width on Lighthouse desktop
+  // emulation lands around 470 CSS px, well below the column's ~570px.
+  //
+  // Ladder the hint by viewport so each tier picks the tightest srcset variant:
+  //   - mobile (≤ 768px): 100vw, the column is full-bleed.
+  //   - tablet (≤ 1280px): 50vw, roughly the half-grid column.
+  //   - desktop: 480px, anchored at the actual rendered column-fit width
+  //     measured on PSI desktop runs (previously hinted 600 → 750w variant,
+  //     now hints 480 → 480w variant, ~40 KiB lighter per image at 1x DPR;
+  //     2x DPR retina still picks 1080w which is plenty for the visible size).
   if (isPortrait && hasObjectContain && hasFullBleed) {
-    const COLUMN_WIDTH_PX = 600;
+    const COLUMN_WIDTH_PX = 480;
     const desktopHint = Math.min(widthForSizes as number, COLUMN_WIDTH_PX);
-    return `(max-width: 768px) 100vw, ${desktopHint}px`;
+    return `(max-width: 768px) 100vw, (max-width: 1280px) 50vw, ${desktopHint}px`;
   }
 
   if (widthForSizes) {
