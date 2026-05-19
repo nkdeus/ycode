@@ -32,6 +32,10 @@ const nextConfig: NextConfig = {
   staticPageGenerationTimeout: 120,
   experimental: {
     proxyClientMaxBodySize: '500mb',
+    // Inline page CSS into <style> tags in <head> instead of shipping a
+    // render-blocking <link rel="stylesheet"> request. site.css is ~19 KiB
+    // and was costing ~330ms on the LCP critical path.
+    inlineCss: true,
   },
   images: {
     remotePatterns: imageRemotePatterns,
