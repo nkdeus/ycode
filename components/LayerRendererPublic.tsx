@@ -22,7 +22,7 @@ import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getStaticTextContent, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { isValidLinkSettings, generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, type LinkResolutionContext } from '@/lib/link-utils';
-import { DEFAULT_ASSETS, computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { DEFAULT_ASSETS, DEFAULT_IMAGE_QUALITY, computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { renderRichText, hasBlockElementsWithInlineVariables, getTextStyleClasses, flattenTiptapParagraphs, type RichTextLinkContext, type RenderComponentBlockFn } from '@/lib/text-format-utils';
 import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper';
@@ -1133,7 +1133,7 @@ const LayerItem: React.FC<{
       // whatever the user/template set.
       const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
 
-      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 80);
+      const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, DEFAULT_IMAGE_QUALITY);
       const srcset = generateImageSrcset(finalImageUrl);
       const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 

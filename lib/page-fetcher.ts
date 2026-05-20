@@ -10,7 +10,7 @@ import { enrichItemsWithCountValues } from '@/lib/repositories/collectionCountRe
 import type { Page, PageFolder, PageLayers, Component, ComponentVariable, CollectionItemWithValues, CollectionField, Layer, CollectionPaginationMeta, Translation, Locale } from '@/types';
 import { getCollectionVariable, resolveFieldValue, evaluateVisibility, getLayerHtmlTag, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { isFieldVariable, isAssetVariable, createDynamicTextVariable, createDynamicRichTextVariable, createAssetVariable, getDynamicTextContent, getVariableStringValue, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
-import { generateImageSrcset, getImageSizes, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, collectLayerAssetIds } from '@/lib/asset-utils';
+import { generateImageSrcset, getImageSizes, getOptimizedImageUrl, getAssetProxyUrl, DEFAULT_ASSETS, DEFAULT_IMAGE_QUALITY, collectLayerAssetIds } from '@/lib/asset-utils';
 import { resolveComponents, applyComponentOverrides } from '@/lib/resolve-components';
 import { isTiptapDoc, hasBlockElementsWithResolver } from '@/lib/tiptap-utils';
 import { castValue } from '@/lib/collection-utils';
@@ -4161,7 +4161,7 @@ function layerToHtml(
         resolvedSrcValue = undefined;
       }
       if (resolvedSrcValue && resolvedSrcValue.trim()) {
-        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, 80);
+        const optimizedSrc = getOptimizedImageUrl(resolvedSrcValue, 1920, DEFAULT_IMAGE_QUALITY);
         attrs.push(`src="${escapeHtml(optimizedSrc)}"`);
 
         const srcset = generateImageSrcset(resolvedSrcValue);

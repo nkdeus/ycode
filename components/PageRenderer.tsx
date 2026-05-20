@@ -12,7 +12,7 @@ import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, extractLatinFontPreloads, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
-import { collectLayerAssetIds, computeImageSizes, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { collectLayerAssetIds, computeImageSizes, DEFAULT_IMAGE_QUALITY, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
@@ -508,7 +508,7 @@ export default async function PageRenderer({
   if (lcpCandidate?.assetId && resolvedAssetsWithMime) {
     const candidateAsset = resolvedAssetsWithMime[lcpCandidate.assetId];
     if (candidateAsset?.url) {
-      lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, 80);
+      lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, DEFAULT_IMAGE_QUALITY);
       lcpPreloadSrcset = generateImageSrcset(candidateAsset.url) || null;
       // Use the SAME sizes string the renderer will emit on the <img>. If
       // these diverge, the browser fetches one srcset variant via preload
