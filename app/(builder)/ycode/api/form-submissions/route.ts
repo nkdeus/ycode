@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import {
   getAllFormSubmissions,
   getFormSummaries,
@@ -14,6 +14,9 @@ import { noCache } from '@/lib/api-response';
 // Disable caching for this route
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+// Keep the function alive long enough for the (slow) webhook/email/integrations
+// dispatched via after() to finish before Vercel freezes the instance.
+export const maxDuration = 120;
 
 /**
  * GET /ycode/api/form-submissions
@@ -88,37 +91,46 @@ export async function POST(request: NextRequest) {
       metadata,
     });
 
-    // Dispatch webhook event (fire and forget)
-    dispatchFormSubmittedEvent({
-      form_id: body.form_id,
-      submission_id: submission.id,
-      fields: body.payload,
-      metadata,
+    // Run webhook, email and integrations AFTER the response is sent.
+    // after() keeps the Vercel function alive until these finish — otherwise the
+    // instance freezes on response and the (slow) Google Apps Script webhook is
+    // killed mid-flight (no delivery row ever created).
+    after(async () => {
+      const tasks: Promise<unknown>[] = [
+        dispatchFormSubmittedEvent({
+          form_id: body.form_id,
+          submission_id: submission.id,
+          fields: body.payload,
+          metadata,
+        }),
+        processAppIntegrations(body.form_id, submission.id, body.payload),
+      ];
+
+      // Send email notification if enabled
+      if (body.email?.enabled && body.email?.to) {
+        // Extract reply-to email from form payload (first email field found)
+        const replyTo = extractReplyToEmail(body.payload);
+
+        tasks.push(
+          sendFormSubmissionEmail(
+            body.email.to,
+            body.email.subject || `New form submission: ${body.form_id}`,
+            {
+              formId: body.form_id,
+              submissionId: submission.id,
+              payload: body.payload,
+              metadata: {
+                ...metadata,
+                submitted_at: submission.created_at,
+              },
+              replyTo,
+            }
+          )
+        );
+      }
+
+      await Promise.allSettled(tasks);
     });
-
-    // Send email notification if enabled (fire and forget)
-    if (body.email?.enabled && body.email?.to) {
-      // Extract reply-to email from form payload (first email field found)
-      const replyTo = extractReplyToEmail(body.payload);
-
-      sendFormSubmissionEmail(
-        body.email.to,
-        body.email.subject || `New form submission: ${body.form_id}`,
-        {
-          formId: body.form_id,
-          submissionId: submission.id,
-          payload: body.payload,
-          metadata: {
-            ...metadata,
-            submitted_at: submission.created_at,
-          },
-          replyTo,
-        }
-      );
-    }
-
-    // Process app integrations (fire and forget)
-    processAppIntegrations(body.form_id, submission.id, body.payload);
 
     return NextResponse.json(
       { data: submission, message: 'Form submitted successfully' },
