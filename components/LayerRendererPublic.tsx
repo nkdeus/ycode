@@ -1184,6 +1184,7 @@ const LayerItem: React.FC<{
       // natural size (the proxy won't upscale; mismatched descriptors break
       // browser intrinsic-dimension math and shrink the rendered image).
       const intrinsicWidth = parseImageDimension(imgWidth);
+      const intrinsicHeight = parseImageDimension(imgHeight);
       const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
       // Use the class-based heuristic from computeImageSizes (fork-specific PSI
       // optimization) — covers explicit sizes, portrait-contain, w-full hero
