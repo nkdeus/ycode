@@ -30,7 +30,7 @@ import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 
-import { injectTranslatedText } from '@/lib/localisation-utils';
+import { injectTranslatedText, translateComponentOverrides } from '@/lib/localisation-utils';
 
 import type { Layer, Component, CollectionItemWithValues, CollectionField, Breakpoint, Asset, ComponentVariable, Locale, Translation } from '@/types';
 import type { UseLiveLayerUpdatesReturn } from '@/hooks/use-live-layer-updates';
@@ -105,8 +105,8 @@ interface CanvasProps {
   onComponentEdit?: (componentId: string, instanceLayerId: string) => void;
   /** Component variables when editing a component (for default value display) */
   editingComponentVariables?: ComponentVariable[];
-  /** Disable editor hidden layers (e.g., when Interactions panel is active) */
-  disableEditorHiddenLayers?: boolean;
+  /** Layer IDs to force-show even if they have display:hidden apply_styles */
+  forceVisibleLayerIds?: string[];
   /** Current canvas zoom percentage (100 = 100%) */
   zoom?: number;
   /** Fixed viewport height for stable measurement of content using vh/svh/dvh units */
@@ -314,7 +314,7 @@ const Canvas = React.memo(function Canvas({
   onCanvasClick,
   onComponentEdit,
   editingComponentVariables,
-  disableEditorHiddenLayers = false,
+  forceVisibleLayerIds,
   zoom = 100,
   referenceViewportHeight,
   currentLocale,
@@ -329,10 +329,21 @@ const Canvas = React.memo(function Canvas({
   // State
   const [iframeReady, setIframeReady] = useState(false);
 
+  // Translate component-instance override values before serialization so that
+  // `resolveComponents` (inside serializeLayers) propagates per-instance
+  // translations through the override pipeline. Runs only when a non-default
+  // locale is active.
+  const layersForSerialization = useMemo(() => {
+    if (!currentLocale || currentLocale.is_default || !translations) return layers;
+    const lookupPageId = pageId || (editingComponentId ?? '');
+    if (!lookupPageId) return layers;
+    return translateComponentOverrides(layers, lookupPageId, translations, { includeIncomplete: true });
+  }, [layers, currentLocale, translations, pageId, editingComponentId]);
+
   // Resolve component instances in layers
   const { layers: resolvedLayers, componentMap } = useMemo(() => {
-    return serializeLayers(layers, components, editingComponentVariables);
-  }, [layers, components, editingComponentVariables]);
+    return serializeLayers(layersForSerialization, components, editingComponentVariables);
+  }, [layersForSerialization, components, editingComponentVariables]);
 
   // When a non-default locale is active, swap layer text and translatable
   // asset references with their translations so the canvas mirrors what the
@@ -390,10 +401,14 @@ const Canvas = React.memo(function Canvas({
   }, [enrichedPageCollectionItemDataRaw]);
 
   // Collect layer IDs that should be hidden on canvas (display: hidden with on-load)
+  // Exclude layers that are force-visible (targets of the active interaction)
   const editorHiddenLayerIds = useMemo(() => {
-    if (disableEditorHiddenLayers) return undefined;
-    return collectEditorHiddenLayerIds(resolvedLayers);
-  }, [resolvedLayers, disableEditorHiddenLayers]);
+    const hiddenMap = collectEditorHiddenLayerIds(resolvedLayers);
+    if (forceVisibleLayerIds && forceVisibleLayerIds.length > 0) {
+      forceVisibleLayerIds.forEach(id => hiddenMap.delete(id));
+    }
+    return hiddenMap;
+  }, [resolvedLayers, forceVisibleLayerIds]);
 
   // Handle layer click with component resolution
   const handleLayerClick = useCallback((layerId: string, event?: React.MouseEvent) => {

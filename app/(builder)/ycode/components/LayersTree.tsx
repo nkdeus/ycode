@@ -157,6 +157,7 @@ interface LayersTreeProps {
   pageId: string;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
+  readOnly?: boolean;
 }
 
 const ROW_HEIGHT = 32;
@@ -259,6 +260,7 @@ interface LayerRowProps {
   onRenameStart: (id: string) => void;
   onRenameConfirm: (id: string, newName: string | null) => void;
   onToggleVisibility: (id: string) => void;
+  readOnly?: boolean;
 }
 
 // Helper to check if a node is a descendant of another
@@ -300,6 +302,7 @@ const LayerRow = React.memo(function LayerRow({
   onRenameStart,
   onRenameConfirm,
   onToggleVisibility,
+  readOnly,
 }: LayerRowProps) {
   const {
     getComponentById,
@@ -555,6 +558,7 @@ const LayerRow = React.memo(function LayerRow({
       liveLayerUpdates={liveLayerUpdates}
       liveComponentUpdates={liveComponentUpdates}
       editingComponentId={editingComponentId}
+      readOnly={readOnly}
     >
       <div
         className="relative flex group/row"
@@ -978,6 +982,7 @@ export default function LayersTree({
   pageId,
   liveLayerUpdates,
   liveComponentUpdates,
+  readOnly = false,
 }: LayersTreeProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -1251,8 +1256,13 @@ export default function LayersTree({
     // Update layer first so the label shows the new name immediately
     if (editingComponentId) {
       const { componentDrafts } = useComponentsStore.getState();
-      const compLayers = componentDrafts[editingComponentId] || [];
-      updateComponentDraft(editingComponentId, updateLayerProps(compLayers, id, { customName: value }));
+      const variantId = useEditorStore.getState().editingComponentVariantId;
+      const variantDrafts = componentDrafts[editingComponentId];
+      const targetVariantId = (variantId && variantDrafts?.[variantId]) ? variantId : (variantDrafts ? Object.keys(variantDrafts)[0] : null);
+      if (targetVariantId && variantDrafts) {
+        const compLayers = variantDrafts[targetVariantId] || [];
+        updateComponentDraft(editingComponentId, targetVariantId, updateLayerProps(compLayers, id, { customName: value }));
+      }
     } else {
       updateLayer(pageId, id, { customName: value });
     }
@@ -1272,21 +1282,28 @@ export default function LayersTree({
 
     if (editingComponentId) {
       const { componentDrafts } = useComponentsStore.getState();
-      const compLayers = componentDrafts[editingComponentId] || [];
-      updateComponentDraft(editingComponentId, updateLayerProps(compLayers, id, updates));
+      const variantId = useEditorStore.getState().editingComponentVariantId;
+      const variantDrafts = componentDrafts[editingComponentId];
+      const targetVariantId = (variantId && variantDrafts?.[variantId]) ? variantId : (variantDrafts ? Object.keys(variantDrafts)[0] : null);
+      if (targetVariantId && variantDrafts) {
+        const compLayers = variantDrafts[targetVariantId] || [];
+        updateComponentDraft(editingComponentId, targetVariantId, updateLayerProps(compLayers, id, updates));
+      }
     } else {
       updateLayer(pageId, id, updates);
     }
   }, [editingComponentId, pageId, updateLayer, updateComponentDraft, flattenedNodes]);
 
   // Configure sensors for drag detection
-  const sensors = useSensors(
+  const defaultSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8, // 8px movement required to start drag
       },
     })
   );
+  const noSensors = useSensors();
+  const sensors = readOnly ? noSensors : defaultSensors;
 
   const handleMultiSelect = useCallback((id: string, modifiers: { meta: boolean; shift: boolean }) => {
     if (id === 'body') {
@@ -2221,6 +2238,7 @@ export default function LayersTree({
                 onRenameStart={handleRenameStart}
                 onRenameConfirm={handleRenameConfirm}
                 onToggleVisibility={handleToggleVisibility}
+                readOnly={readOnly}
               />
             </VirtualLayerRow>
           );

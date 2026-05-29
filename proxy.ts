@@ -20,6 +20,8 @@ const PUBLIC_COLLECTION_ITEM_SUFFIXES = ['/items/filter', '/items/load-more'];
 
 const PUBLIC_API_EXACT = [
   '/ycode/api/revalidate', // Cache revalidation — has own secret token auth
+  '/ycode/api/oauth/register', // RFC 7591 Dynamic Client Registration — anonymous
+  '/ycode/api/oauth/token',    // OAuth token exchange — auth is via PKCE/refresh
 ];
 
 /**
@@ -60,6 +62,7 @@ function isPublicApiRoute(pathname: string, method: string): boolean {
   }
 
   if (PUBLIC_API_EXACT.includes(pathname)) return true;
+
   if (PUBLIC_API_PREFIXES.some((prefix) => pathname.startsWith(prefix))) return true;
 
   // Collection item endpoints for published pages (POST only — filter, load-more)
@@ -113,15 +116,23 @@ async function verifyApiAuth(request: NextRequest): Promise<NextResponse | null>
     );
   }
 
-  return null;
+  // Authenticated — pass through with any refreshed cookies
+  const authResponse = NextResponse.next({ request });
+  response.cookies.getAll().forEach((cookie) => {
+    authResponse.cookies.set(cookie.name, cookie.value);
+  });
+
+  return authResponse;
 }
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // MCP endpoint uses its own token-based authentication — skip session auth.
-  // Cloud overlay proxies MUST also exempt this path to avoid login redirects.
-  if (pathname.startsWith('/ycode/mcp/')) {
+  // MCP endpoints use their own token-based authentication — skip session auth.
+  // Cloud overlay proxies MUST also exempt these paths to avoid login redirects.
+  //   - `/ycode/mcp/<token>`: legacy URL-token endpoint (Cursor, Windsurf, etc.)
+  //   - `/ycode/mcp`: OAuth Bearer-token endpoint (Claude.ai web, ChatGPT)
+  if (pathname === '/ycode/mcp' || pathname.startsWith('/ycode/mcp/')) {
     const response = NextResponse.next();
     response.headers.set('x-pathname', pathname);
     return response;
@@ -131,9 +142,14 @@ export async function proxy(request: NextRequest) {
   if (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview')) {
     const authResponse = await verifyApiAuth(request);
     if (authResponse) {
-      if (pathname.startsWith('/ycode/preview')) {
-        return NextResponse.redirect(new URL('/ycode', request.url));
+      if (authResponse.status === 401) {
+        if (pathname.startsWith('/ycode/preview')) {
+          return NextResponse.redirect(new URL('/ycode', request.url));
+        }
+        return authResponse;
       }
+      // Authenticated — pass through
+      authResponse.headers.set('x-pathname', pathname);
       return authResponse;
     }
   }

@@ -22,7 +22,7 @@ import { DEFAULT_ASSETS, ASSET_CATEGORIES, isAssetOfType } from '@/lib/asset-uti
 import { parseMultiAssetFieldValue, buildAssetVirtualValues } from '@/lib/multi-asset-utils';
 import { parseMultiReferenceValue, resolveReferenceFieldsSync } from '@/lib/collection-utils';
 import { MULTI_ASSET_COLLECTION_ID } from '@/lib/collection-field-utils';
-import { computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { computeImageSizes, generateImageSrcset, getOptimizedImageUrl, parseImageDimension } from '@/lib/asset-utils';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { toast } from 'sonner';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
@@ -31,6 +31,7 @@ import { hasComponentOrVariable } from '@/lib/tiptap-utils';
 import LayerContextMenu from '@/app/(builder)/ycode/components/LayerContextMenu';
 import CanvasTextEditor from '@/app/(builder)/ycode/components/CanvasTextEditor';
 import { useComponentsStore } from '@/stores/useComponentsStore';
+import { getComponentVariantLayers } from '@/lib/component-variant-utils';
 import { useCollectionLayerStore } from '@/stores/useCollectionLayerStore';
 import { useFilterStore } from '@/stores/useFilterStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
@@ -231,6 +232,7 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
                 collectionLayerId={originalLayerId}
                 itemIds={layer._paginationMeta!.itemIds}
                 layerTemplate={layer._paginationMeta!.layerTemplate}
+                collectionLayer={layer._filterConfig?.collectionLayer || layer._paginationMeta!.collectionLayer}
               >
                 {content}
               </LoadMoreCollection>
@@ -264,6 +266,7 @@ const LayerRenderer: React.FC<LayerRendererProps> = ({
               collectionLayerClasses={layer._filterConfig!.collectionLayerClasses}
               collectionLayerTag={layer._filterConfig!.collectionLayerTag}
               isPublished={layer._filterConfig!.isPublished}
+              collectionLayer={layer._filterConfig!.collectionLayer}
             >
               {content}
             </FilterableCollection>
@@ -468,6 +471,8 @@ const LayerItemImpl: React.FC<{
   const isDragging = activeLayerId === layer.id;
   const textEditable = isTextEditable(layer);
 
+  const isEditor = useAuthStore((state) => state.role === 'editor');
+
   // Collaboration layer locking - use unified resource lock system
   const currentUserId = useAuthStore((state) => state.user?.id);
   const lockKey = getResourceLockKey(RESOURCE_TYPES.LAYER, layer.id);
@@ -606,45 +611,49 @@ const LayerItemImpl: React.FC<{
   const textVariable = layer.variables?.text;
   let useSpanForParagraphs = false;
 
-  if (!isSimpleTextLayer) {
-    const restrictiveBlockTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'button'];
-    const isRestrictiveTag = restrictiveBlockTags.includes(htmlTag);
+  const restrictiveBlockTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'button'];
+  const isRestrictiveTag = restrictiveBlockTags.includes(htmlTag);
 
-    if (isRestrictiveTag) {
-      let hasLists = false;
+  if (isRestrictiveTag) {
+    let hasLists = false;
 
-      if (textVariable?.type === 'dynamic_rich_text') {
-        hasLists = hasBlockElementsWithInlineVariables(
-          textVariable as any,
-          collectionLayerData,
-          pageCollectionItemData || undefined
-        );
-      }
+    if (textVariable?.type === 'dynamic_rich_text') {
+      hasLists = hasBlockElementsWithInlineVariables(
+        textVariable as any,
+        collectionLayerData,
+        pageCollectionItemData || undefined
+      );
+    }
 
-      // Also check resolved component variable value for block elements
-      if (!hasLists) {
-        const componentVariables = parentComponentVariables || editingComponentVariables;
-        const linkedVariableId = (textVariable as any)?.id;
-        if (linkedVariableId && componentVariables) {
-          const variableDef = componentVariables.find(v => v.id === linkedVariableId);
-          const overrideCategory = variableDef?.type === 'rich_text' ? 'rich_text' : 'text';
-          const overrideValue = parentComponentOverrides?.[overrideCategory]?.[linkedVariableId];
-          const valueToCheck = overrideValue ?? variableDef?.default_value;
-          if (valueToCheck && 'type' in valueToCheck && valueToCheck.type === 'dynamic_rich_text') {
-            hasLists = hasBlockElementsWithInlineVariables(
-              valueToCheck as any,
-              collectionLayerData,
-              pageCollectionItemData || undefined
-            );
-          }
+    // Also check resolved component variable value for block elements
+    if (!hasLists) {
+      const componentVariables = parentComponentVariables || editingComponentVariables;
+      const linkedVariableId = (textVariable as any)?.id;
+      if (linkedVariableId && componentVariables) {
+        const variableDef = componentVariables.find(v => v.id === linkedVariableId);
+        const overrideCategory = variableDef?.type === 'rich_text' ? 'rich_text' : 'text';
+        const overrideValue = parentComponentOverrides?.[overrideCategory]?.[linkedVariableId];
+        const valueToCheck = overrideValue ?? variableDef?.default_value;
+        if (valueToCheck && 'type' in valueToCheck && valueToCheck.type === 'dynamic_rich_text') {
+          hasLists = hasBlockElementsWithInlineVariables(
+            valueToCheck as any,
+            collectionLayerData,
+            pageCollectionItemData || undefined
+          );
         }
       }
+    }
 
-      if (hasLists) {
-        htmlTag = 'div';
-      } else if (textVariable?.type === 'dynamic_rich_text' || (textVariable as any)?.id) {
-        useSpanForParagraphs = true;
-      }
+    if (hasLists) {
+      // Block-level expansion (lists, tables, embedded components) cannot live
+      // inside <p>/<h*>/<span>; switch the wrapper to a <div> regardless of
+      // whether this is a simple text layer or a richText layer.
+      htmlTag = 'div';
+    } else if (!isSimpleTextLayer && (textVariable?.type === 'dynamic_rich_text' || (textVariable as any)?.id)) {
+      // For non-simple-text layers with rich-text content but no block
+      // expansion, render paragraphs as <span class="block"> to keep them
+      // valid inside the existing wrapper.
+      useSpanForParagraphs = true;
     }
   }
 
@@ -924,8 +933,81 @@ const LayerItemImpl: React.FC<{
     };
   }, [isFilterLayer, filterOnChange, isEditMode, layer.id]);
 
+  // Canvas-only: identify pagination sibling/wrapper layers so we can
+  // substitute dynamic text and hide the wrapper when the linked collection
+  // is empty. Published mode handles this server-side via
+  // `updatePaginationLayerWithMeta` in page-fetcher.
+  const paginationContextTarget = useMemo<{ collectionLayerId: string; kind: 'count' | 'info' | 'wrapper' } | null>(() => {
+    if (!isEditMode || !layer.id) return null;
+    if (layer.id.endsWith('-pagination-count')) {
+      return { collectionLayerId: layer.id.replace(/-pagination-count$/, ''), kind: 'count' };
+    }
+    if (layer.id.endsWith('-pagination-info')) {
+      return { collectionLayerId: layer.id.replace(/-pagination-info$/, ''), kind: 'info' };
+    }
+    const paginationFor = layer.attributes?.['data-pagination-for'];
+    if (typeof paginationFor === 'string' && paginationFor) {
+      return { collectionLayerId: paginationFor, kind: 'wrapper' };
+    }
+    return null;
+  }, [isEditMode, layer.id, layer.attributes]);
+
+  const paginationLinkedCollectionLayer = usePagesStore((state) => {
+    if (!paginationContextTarget || !pageId) return null;
+    const draft = state.draftsByPageId[pageId];
+    if (!draft) return null;
+    return findLayerById(draft.layers, paginationContextTarget.collectionLayerId);
+  });
+
+  const paginationLinkedLayerTotal = useCollectionLayerStore((state) =>
+    paginationContextTarget ? state.layerTotal[paginationContextTarget.collectionLayerId] : undefined
+  );
+
+  /**
+   * Resolves the displayed total for the linked paginated collection.
+   * Returns `undefined` while data is loading (don't flash "0 of 0") or when
+   * pagination isn't applicable to this layer.
+   */
+  const paginationDisplayTotal = useMemo<number | undefined>(() => {
+    if (!paginationContextTarget || !paginationLinkedCollectionLayer) return undefined;
+    const linkedCollection = getCollectionVariable(paginationLinkedCollectionLayer);
+    if (!linkedCollection?.pagination?.enabled) return undefined;
+    if (paginationLinkedLayerTotal === undefined) return undefined;
+    const maxTotal = typeof linkedCollection.limit === 'number' && linkedCollection.limit > 0
+      ? linkedCollection.limit
+      : undefined;
+    return maxTotal != null
+      ? Math.min(paginationLinkedLayerTotal, maxTotal)
+      : paginationLinkedLayerTotal;
+  }, [paginationContextTarget, paginationLinkedCollectionLayer, paginationLinkedLayerTotal]);
+
+  const isPaginationWrapperEmpty = paginationContextTarget?.kind === 'wrapper'
+    && paginationDisplayTotal !== undefined
+    && paginationDisplayTotal <= 0;
+
+  const computedPaginationText = useMemo<string | undefined>(() => {
+    if (!paginationContextTarget || paginationContextTarget.kind === 'wrapper') return undefined;
+    if (paginationDisplayTotal === undefined) return undefined;
+    if (paginationDisplayTotal <= 0) return '';
+    const pagination = getCollectionVariable(paginationLinkedCollectionLayer!)?.pagination;
+    const itemsPerPage = pagination?.items_per_page || 10;
+    if (paginationContextTarget.kind === 'count') {
+      const shown = Math.min(itemsPerPage, paginationDisplayTotal);
+      return `Showing ${shown} of ${paginationDisplayTotal}`;
+    }
+    const totalPages = Math.max(1, Math.ceil(paginationDisplayTotal / itemsPerPage));
+    return `Page 1 of ${totalPages}`;
+  }, [paginationContextTarget, paginationLinkedCollectionLayer, paginationDisplayTotal]);
+
   // Resolve text and image URLs with field binding support
   const textContent = (() => {
+    // Canvas pagination overlay: when this layer is the count/info sibling of
+    // a paginated collection, replace the placeholder content with the same
+    // dynamic text SSR would render.
+    if (computedPaginationText !== undefined) {
+      return computedPaginationText;
+    }
+
     // Special handling for locale selector label.
     // Runs in both edit and runtime modes so the builder canvas reflects the
     // active locale chosen via the header dropdown — otherwise the label
@@ -1175,9 +1257,27 @@ const LayerItemImpl: React.FC<{
   // injectTranslatedText pass on the serialized page layers. Without injecting
   // here, component content would always render in the default language even
   // when the user previews a non-default locale on a page.
+  // If this nested-component instance has its variant choice driven by a
+  // parent component variable, resolve the effective variant id from the
+  // parent's override (or the variable's default). Mirrors the SSR branch in
+  // `applyComponentOverrides`; without this the canvas keeps using the
+  // baked-in `componentVariantId` and ignores instance-level overrides.
+  const effectiveVariantId = useMemo(() => {
+    const linkedId = layer.componentVariantVariableId;
+    if (!linkedId) return layer.componentVariantId;
+    const variableDef = parentComponentVariables?.find(v => v.id === linkedId);
+    const overrideValue = parentComponentOverrides?.variant?.[linkedId];
+    const value = (overrideValue ?? variableDef?.default_value) as { variant_id?: string } | undefined;
+    return value?.variant_id ?? layer.componentVariantId;
+  }, [layer.componentVariantVariableId, layer.componentVariantId, parentComponentVariables, parentComponentOverrides]);
+
   const transformedComponentLayers = useMemo(() => {
-    if (!isEditMode || !component?.layers?.length) return null;
-    const transformed = transformLayerIdsForInstance(component.layers, layer.id);
+    if (!isEditMode || !component) return null;
+    // Pick the variant the instance is bound to (silently falls back to the
+    // first variant when the requested one was deleted).
+    const variantLayers = getComponentVariantLayers(component, effectiveVariantId);
+    if (!variantLayers.length) return null;
+    const transformed = transformLayerIdsForInstance(variantLayers, layer.id);
     if (!currentLocale || currentLocale.is_default || !translations) {
       return transformed;
     }
@@ -1185,7 +1285,7 @@ const LayerItemImpl: React.FC<{
       includeIncomplete: true,
       defaultMasterComponentId: component.id,
     });
-  }, [isEditMode, component, layer.id, currentLocale, translations, pageId]);
+  }, [isEditMode, component, layer.id, effectiveVariantId, currentLocale, translations, pageId]);
 
   // Collect hidden layer IDs from the component's transformed layers
   // Needed because Canvas computes editorHiddenLayerIds from serializeLayers (different ID transform)
@@ -1296,6 +1396,7 @@ const LayerItemImpl: React.FC<{
     // Apply collection filters (evaluate against each item's own values)
     // In edit mode, skip conditions that have inputLayerId (dynamic filter inputs have no value at design time)
     const collectionFilters = collectionVariable?.filters;
+    const hasStaticFilters = !!collectionFilters?.groups?.some(g => g.conditions.some(c => !c.inputLayerId));
     if (collectionFilters?.groups?.length) {
       const effectiveFilters = isEditMode
         ? {
@@ -1313,15 +1414,38 @@ const LayerItemImpl: React.FC<{
         items = items.filter(item =>
           evaluateVisibility(effectiveFilters, {
             collectionLayerData: item.values,
-            pageCollectionData: null,
+            pageCollectionData: pageCollectionItemData ?? null,
             pageCollectionCounts: {},
+            currentItemId: item.id,
+            pageCollectionItemId,
           })
         );
       }
     }
 
+    // Mirror SSR semantics: pagination (when enabled) overrides legacy
+    // `limit`/`offset`, showing only `items_per_page` items — same as the
+    // first page of preview. Without pagination, fall back to legacy
+    // `limit`/`offset`. We slice unconditionally for paginated layers, and
+    // when static filters are present for non-paginated ones (the API
+    // returns the configured limit when there are no static filters, so no
+    // re-slicing is needed there).
+    const pagination = collectionVariable?.pagination;
+    const isPaginated = !!pagination?.enabled && (pagination.mode === 'pages' || pagination.mode === 'load_more');
+
+    if (isPaginated) {
+      const itemsPerPage = pagination!.items_per_page || 10;
+      items = items.slice(0, itemsPerPage);
+    } else if (hasStaticFilters) {
+      const offset = collectionVariable?.offset ?? 0;
+      const limit = collectionVariable?.limit;
+      if (offset || limit) {
+        items = items.slice(offset, limit ? offset + limit : undefined);
+      }
+    }
+
     return items;
-  }, [collectionId, allCollectionItems, sourceFieldId, sourceFieldType, sourceFieldSource, collectionLayerData, pageCollectionItemData, collectionLayerItemId, pageCollectionItemId, getAsset, collectionVariable?.filters, isEditMode]);
+  }, [collectionId, allCollectionItems, sourceFieldId, sourceFieldType, sourceFieldSource, collectionLayerData, pageCollectionItemData, collectionLayerItemId, pageCollectionItemId, getAsset, collectionVariable?.filters, collectionVariable?.limit, collectionVariable?.offset, collectionVariable?.pagination, isEditMode]);
 
   const optionsSourceSort = layer.settings?.optionsSource;
 
@@ -1377,13 +1501,38 @@ const LayerItemImpl: React.FC<{
       }
     }
 
+    // When static filters are present, fetch the full set so client-side
+    // filtering matches SSR (which filters then limits). The API's default
+    // `limit=25` would otherwise return a page of items that all fail the
+    // filter (e.g. all past events for a "date >= today" filter), hiding the
+    // layer. Mirrors the per-collection cap used by SSR's collection cache.
+    const FILTERED_FETCH_LIMIT = 5000;
+    const hasStaticFilters = !!collectionVariable.filters?.groups?.some(
+      g => g.conditions.some(c => !c.inputLayerId)
+    );
+    const pagination = collectionVariable.pagination;
+    const isPaginated = !!pagination?.enabled && (pagination.mode === 'pages' || pagination.mode === 'load_more');
+
+    let fetchLimit: number | undefined;
+    let fetchOffset: number | undefined;
+    if (hasStaticFilters) {
+      fetchLimit = FILTERED_FETCH_LIMIT;
+      fetchOffset = 0;
+    } else if (isPaginated) {
+      fetchLimit = pagination!.items_per_page || 10;
+      fetchOffset = 0;
+    } else {
+      fetchLimit = collectionVariable.limit;
+      fetchOffset = collectionVariable.offset;
+    }
+
     fetchLayerData(
       layer.id,
       collectionVariable.id,
       sortBy,
       sortOrder,
-      collectionVariable.limit,
-      collectionVariable.offset
+      fetchLimit,
+      fetchOffset
     );
   }, [
     isEditMode,
@@ -1395,6 +1544,8 @@ const LayerItemImpl: React.FC<{
     collectionVariable?.sort_order_inputLayerId,
     collectionVariable?.limit,
     collectionVariable?.offset,
+    collectionVariable?.filters,
+    collectionVariable?.pagination,
     optionsSourceSort?.sortFieldId,
     optionsSourceSort?.sortOrder,
     sortByInputDefaultValue,
@@ -1597,12 +1748,30 @@ const LayerItemImpl: React.FC<{
   // because it treats font-size as overriding line-height. Our own
   // setBreakpointClass already handles property-aware conflict resolution.
 
-  // <a> with display:flex is block-level (full width) unlike <button> which
-  // shrink-wraps. Add w-fit to match button sizing unless width is explicit.
+  // `<button>` defaults to `display: inline-block` (shrink-wraps) and
+  // `text-align: center`, while `<a>` defaults to `display: inline` and inherits
+  // text-align (typically left). When a button-with-link is rendered as `<a>`,
+  // re-apply those button defaults so layout matches:
+  // - `w-fit`: only if no explicit width or block-level display class is set,
+  //   since those make the element block-level (full width) on purpose.
+  // - `text-center`: only if no explicit text-align class is set.
+  const BLOCK_DISPLAY_CLASSES = new Set([
+    'flex', 'block', 'grid', 'table', 'flow-root',
+  ]);
+  const TEXT_ALIGN_CLASSES = new Set([
+    'text-left', 'text-center', 'text-right', 'text-justify', 'text-start', 'text-end',
+  ]);
+  const layerClassList = isButtonWithLink
+    ? (Array.isArray(layer.classes) ? layer.classes : (layer.classes || '').split(' '))
+    : [];
   const buttonNeedsFit = isButtonWithLink && (() => {
-    const cls = Array.isArray(layer.classes) ? layer.classes : (layer.classes || '').split(' ');
-    return !cls.some((c: string) => /^w-/.test(c.split(':').pop() || ''));
+    const hasWidth = layerClassList.some((c: string) => /^w-/.test(c.split(':').pop() || ''));
+    if (hasWidth) return false;
+    const hasBlockDisplay = layerClassList.some((c: string) => BLOCK_DISPLAY_CLASSES.has(c.split(':').pop() || ''));
+    return !hasBlockDisplay;
   })();
+  const buttonNeedsTextCenter = isButtonWithLink
+    && !layerClassList.some((c: string) => TEXT_ALIGN_CLASSES.has(c.split(':').pop() || ''));
 
   const fullClassName = isEditMode ? clsx(
     classesString,
@@ -1610,12 +1779,14 @@ const LayerItemImpl: React.FC<{
     SWIPER_CLASS_MAP[layer.name],
     isSlideChild && 'swiper-slide',
     buttonNeedsFit && 'w-fit',
+    buttonNeedsTextCenter && 'text-center',
     enableDragDrop && !isEditing && !isLockedByOther && 'cursor-default',
     isDragging && 'opacity-30',
     showProjection && 'outline outline-1 outline-dashed outline-blue-400 bg-blue-50/10',
     isLockedByOther && 'opacity-90 pointer-events-none select-none',
+    isPaginationWrapperEmpty && 'hidden',
     'ycode-layer'
-  ) : clsx(classesString, paragraphClasses, SWIPER_CLASS_MAP[layer.name], isSlideChild && 'swiper-slide', buttonNeedsFit && 'w-fit');
+  ) : clsx(classesString, paragraphClasses, SWIPER_CLASS_MAP[layer.name], isSlideChild && 'swiper-slide', buttonNeedsFit && 'w-fit', buttonNeedsTextCenter && 'text-center');
 
   // Check if layer should be hidden (hide completely in both edit mode and public pages)
   if (layer.settings?.hidden) {
@@ -1641,6 +1812,8 @@ const LayerItemImpl: React.FC<{
       collectionLayerData,
       pageCollectionData: pageCollectionItemData,
       pageCollectionCounts,
+      currentItemId: collectionLayerItemId,
+      pageCollectionItemId,
     });
     if (!isVisible) {
       return null;
@@ -2130,9 +2303,11 @@ const LayerItemImpl: React.FC<{
       // Use default image if URL is empty or invalid
       const finalImageUrl = imageUrl && imageUrl.trim() !== '' ? imageUrl : DEFAULT_ASSETS.IMAGE;
 
-      // Resolve intrinsic dimensions: explicit attributes > asset record > URL reverse-lookup
-      let imgWidth = layer.attributes?.width != null ? String(layer.attributes.width) : undefined;
-      let imgHeight = layer.attributes?.height != null ? String(layer.attributes.height) : undefined;
+      // Resolve intrinsic dimensions: explicit attributes > asset record > URL reverse-lookup.
+      // Zero/invalid attribute values are ignored so the asset fallback still runs
+      // (e.g. when a layer stores width="0" from an older bug or manual edit).
+      let imgWidth: string | undefined = parseImageDimension(layer.attributes?.width as string | number | undefined)?.toString();
+      let imgHeight: string | undefined = parseImageDimension(layer.attributes?.height as string | number | undefined)?.toString();
 
       if (!imgWidth || !imgHeight) {
         const assetId = isAssetVariable(imageVariable) ? getAssetId(imageVariable) : undefined;
@@ -2160,7 +2335,17 @@ const LayerItemImpl: React.FC<{
       const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 80);
-      const srcset = generateImageSrcset(finalImageUrl);
+
+      // Resolve intrinsic dimensions once — used for srcset capping AND for
+      // setting concrete width/height attrs further down (drops `width="0"`
+      // bleed-through from older layer data).
+      const intrinsicWidth = parseImageDimension(imgWidth);
+      const intrinsicHeight = parseImageDimension(imgHeight);
+
+      // Pass intrinsic width so srcset descriptors don't exceed the source's
+      // natural size (the proxy won't upscale; mismatched descriptors break
+      // browser intrinsic-dimension math and shrink the rendered image).
+      const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
       const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 
       const imageProps: Record<string, any> = {
@@ -2170,8 +2355,12 @@ const LayerItemImpl: React.FC<{
         decoding: 'async',
       };
 
-      if (imgWidth) imageProps.width = imgWidth;
-      if (imgHeight) imageProps.height = imgHeight;
+      // Set only positive intrinsic values; otherwise drop any `width="0"`/
+      // `height="0"` that leaked in via normalizedAttributes.
+      if (intrinsicWidth) imageProps.width = intrinsicWidth;
+      else delete imageProps.width;
+      if (intrinsicHeight) imageProps.height = intrinsicHeight;
+      else delete imageProps.height;
       if (effectiveLoading) imageProps.loading = effectiveLoading;
       if (isLcpCandidate) imageProps.fetchPriority = 'high';
 
@@ -2238,6 +2427,12 @@ const LayerItemImpl: React.FC<{
     if (htmlTag === 'select') {
       if (isInsideForm && !elementProps.name) {
         elementProps.name = layer.settings?.id || layer.id;
+      }
+
+      // Drop null/undefined value so the select can fall back to defaultValue
+      // (React warns about a null value prop on <select>).
+      if ('value' in elementProps && elementProps.value == null) {
+        delete elementProps.value;
       }
 
       // In edit mode, keep value controlled (canvas selects aren't interactive)
@@ -3280,6 +3475,7 @@ const LayerItemImpl: React.FC<{
         onLayerSelect={onLayerClick}
         liveLayerUpdates={liveLayerUpdates}
         liveComponentUpdates={liveComponentUpdates}
+        readOnly={isEditor}
       >
         {content}
       </LayerContextMenu>

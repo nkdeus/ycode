@@ -64,7 +64,7 @@ export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps
   const formSettings: FormSettingsType = layer?.settings?.form || {};
   const successAction = formSettings.success_action || 'message';
   const handleRedirectLinkChange = useCallback(
-    (value: LinkSettingsValue) => {
+    (value: LinkSettingsValue | null) => {
       if (!layer) return;
 
       onLayerUpdate(layer.id, {
@@ -72,7 +72,7 @@ export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps
           ...layer.settings,
           form: {
             ...layer.settings?.form,
-            redirect_url: value,
+            redirect_url: value ?? undefined,
           },
         },
       });
@@ -122,6 +122,27 @@ export default function FormSettings({ layer, onLayerUpdate }: FormSettingsProps
   // Only show for form layers
   if (!layer || layer.name !== 'form') {
     return null;
+  }
+
+  // Password-protected forms gate access to locked pages — they are wired to
+  // /api/page-auth/verify automatically, so the standard form options
+  // (success action, redirect, email notification) don't apply.
+  const isPasswordForm = formSettings.form_type === 'password_protected';
+
+  if (isPasswordForm) {
+    return (
+      <SettingsPanel
+        title="Form Settings"
+        isOpen={isOpen}
+        onToggle={() => setIsOpen(!isOpen)}
+      >
+        <div className="text-xs text-muted-foreground leading-relaxed">
+          This form gates access to password-protected pages. Style it freely;
+          the submit handler is wired automatically. On a wrong password, the
+          Error alert layer inside the form is shown.
+        </div>
+      </SettingsPanel>
+    );
   }
 
   const emailNotification = formSettings.email_notification || { enabled: false, to: '' };

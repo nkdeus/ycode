@@ -12,7 +12,7 @@ import { resolveCustomCodePlaceholders } from '@/lib/resolve-cms-variables';
 import { renderRootLayoutHeadCode } from '@/lib/parse-head-html';
 import { generateInitialAnimationCSS, type HiddenLayerInfo } from '@/lib/animation-utils';
 import { buildCustomFontsCss, buildFontClassesCss, extractLatinFontPreloads, fetchGoogleFontsCss, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
-import { collectLayerAssetIds, computeImageSizes, DEFAULT_IMAGE_QUALITY, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { buildImageSizes, collectLayerAssetIds, computeImageSizes, DEFAULT_IMAGE_QUALITY, findLcpCandidate, generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
 import { getAllPages } from '@/lib/repositories/pageRepository';
 import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { getMapboxAccessToken, getGoogleMapsEmbedApiKey } from '@/lib/map-server';
@@ -21,8 +21,8 @@ import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { getItemsWithValues, getItemsWithValuesByIds } from '@/lib/repositories/collectionItemRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
 import { REF_PAGE_PREFIX, REF_COLLECTION_PREFIX, isCollectionItemKeyword, parseCollectionLinkValue } from '@/lib/link-utils';
-import { getClassesString } from '@/lib/layer-utils';
-import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder } from '@/types';
+import { getClassesString, hasPasswordFormLayer } from '@/lib/layer-utils';
+import type { Layer, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, PasswordProtectionContext } from '@/types';
 
 interface PageLinkRef { collection_item_id: string; page_id: string }
 
@@ -38,7 +38,8 @@ const getCachedPublishedFolders = unstable_cache(
   { tags: ['all-pages'], revalidate: false }
 );
 
-/** Recursively collect all page link refs ({collection_item_id, page_id}) from a Tiptap JSON node */
+/** Recursively collect all page link refs ({collection_item_id, page_id}) from a Tiptap JSON node.
+ * Also descends into pre-resolved layers stored on embedded richTextComponent nodes. */
 function collectTiptapPageLinks(node: any): PageLinkRef[] {
   if (!node || typeof node !== 'object') return [];
   const results: PageLinkRef[] = [];
@@ -49,6 +50,10 @@ function collectTiptapPageLinks(node: any): PageLinkRef[] {
         results.push({ collection_item_id: mark.attrs.page.collection_item_id, page_id: mark.attrs.page.id });
       }
     }
+  }
+  // Pre-resolved layers from rich-text-embedded components (set by resolveTiptapComponentCollections)
+  if (node.type === 'richTextComponent' && Array.isArray(node.attrs?._resolvedLayers)) {
+    results.push(...collectLayerPageLinks(node.attrs._resolvedLayers as Layer[]));
   }
   if (node.content && Array.isArray(node.content)) {
     for (const child of node.content) results.push(...collectTiptapPageLinks(child));
@@ -87,15 +92,34 @@ function collectLayerPageLinks(layers: Layer[]): PageLinkRef[] {
   return results;
 }
 
+/** Recursively scan a Tiptap JSON node for richTextComponent nodes and harvest
+ * slugs from their pre-resolved layers (populated by resolveTiptapComponentCollections). */
+function extractTiptapCollectionItemSlugs(node: any, slugs: Record<string, string>): void {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'richTextComponent' && Array.isArray(node.attrs?._resolvedLayers)) {
+    const nested = extractCollectionItemSlugs(node.attrs._resolvedLayers as Layer[]);
+    Object.assign(slugs, nested);
+  }
+  if (Array.isArray(node.content)) {
+    for (const child of node.content) extractTiptapCollectionItemSlugs(child, slugs);
+  }
+}
+
 /**
  * Extract collection item slugs from resolved collection layers.
  * These are populated by resolveCollectionLayers with `_collectionItemId` / `_collectionItemSlug`.
+ * Also descends into pre-resolved layers of rich-text-embedded components so links inside
+ * those components (e.g. "current-collection") can be resolved at render time.
  */
 function extractCollectionItemSlugs(layers: Layer[]): Record<string, string> {
   const slugs: Record<string, string> = {};
   const scan = (layer: Layer) => {
     if (layer._collectionItemId && layer._collectionItemSlug) {
       slugs[layer._collectionItemId] = layer._collectionItemSlug;
+    }
+    const textVar = layer.variables?.text as any;
+    if (textVar?.type === 'dynamic_rich_text' && textVar.data?.content) {
+      extractTiptapCollectionItemSlugs(textVar.data.content, slugs);
     }
     if (layer.children) layer.children.forEach(scan);
   };
@@ -186,14 +210,6 @@ function hasAnyInteractions(layers: Layer[]): boolean {
   return false;
 }
 
-/** Password protection context for 401 error pages */
-export type PasswordProtectionContext = {
-  pageId?: string;
-  folderId?: string;
-  redirectUrl: string;
-  isPublished: boolean;
-};
-
 interface PageRendererProps {
   page: Page;
   layers: Layer[];
@@ -272,6 +288,10 @@ export default async function PageRenderer({
   // Layers are always pre-resolved by the caller (page-fetcher).
   // Components are passed through for rich-text embedded component rendering in LayerRenderer.
   const resolvedLayers = layers || [];
+  // When the 401 page contains an editable password-protected form layer, the form
+  // is rendered & wired inline by LayerRendererPublic; otherwise we fall back to
+  // the hardcoded PasswordForm so older / customised 401 pages still work.
+  const hasInlinePasswordForm = is401Page && hasPasswordFormLayer(resolvedLayers);
 
   // Single tree traversal — derive both sets from the flat list
   const allPageLinks = collectLayerPageLinks(resolvedLayers);
@@ -509,7 +529,7 @@ export default async function PageRenderer({
     const candidateAsset = resolvedAssetsWithMime[lcpCandidate.assetId];
     if (candidateAsset?.url) {
       lcpPreloadSrc = getOptimizedImageUrl(candidateAsset.url, 1920, DEFAULT_IMAGE_QUALITY);
-      lcpPreloadSrcset = generateImageSrcset(candidateAsset.url) || null;
+      lcpPreloadSrcset = generateImageSrcset(candidateAsset.url, undefined, undefined, candidateAsset.width) || null;
       // Use the SAME sizes string the renderer will emit on the <img>. If
       // these diverge, the browser fetches one srcset variant via preload
       // and a different one via the img tag — preload bytes are wasted.
@@ -712,10 +732,12 @@ export default async function PageRenderer({
           components={components}
           serverSettings={serverSettings}
           lcpCandidateLayerId={lcpCandidateLayerId}
+          passwordProtection={is401Page ? passwordProtection : undefined}
         />
 
-        {/* Inject password form for 401 error pages */}
-        {is401Page && passwordProtection && (
+        {/* Fallback hardcoded password form: only when the 401 page has no inline
+            password-protected form layer (e.g. older / customised 401 pages). */}
+        {is401Page && passwordProtection && !hasInlinePasswordForm && (
           <PasswordForm
             pageId={passwordProtection.pageId}
             folderId={passwordProtection.folderId}

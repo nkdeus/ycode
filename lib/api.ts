@@ -199,6 +199,7 @@ export const publishApi = {
     components: number;
     layerStyles: number;
     assets: number;
+    translations: number;
     total: number;
   }>> {
     return apiRequest('/ycode/api/publish/preview');
@@ -568,6 +569,13 @@ export const collectionsApi = {
 
   async getItemById(collectionId: string, itemId: string): Promise<ApiResponse<CollectionItemWithValues>> {
     return apiRequest<CollectionItemWithValues>(`/ycode/api/collections/${collectionId}/items/${itemId}`);
+  },
+
+  async getItemSlugs(itemIds: string[]): Promise<ApiResponse<{ slugs: Record<string, string> }>> {
+    return apiRequest<{ slugs: Record<string, string> }>('/ycode/api/collections/items/slugs', {
+      method: 'POST',
+      body: JSON.stringify({ itemIds }),
+    });
   },
 
   async createItem(collectionId: string, values: Record<string, any>, statusAction?: StatusAction): Promise<ApiResponse<CollectionItemWithValues>> {

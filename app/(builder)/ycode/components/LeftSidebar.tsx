@@ -6,6 +6,7 @@ import Icon from '@/components/ui/icon';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // 4. Internal components
+import ComponentVariantsSection from './ComponentVariantsSection';
 import LayersTree from './LayersTree';
 import LeftSidebarPages, { type LeftSidebarPagesHandle } from './LeftSidebarPages';
 
@@ -40,6 +41,7 @@ interface LeftSidebarProps {
   onPageSelect: (pageId: string) => void;
   liveLayerUpdates?: UseLiveLayerUpdatesReturn | null;
   liveComponentUpdates?: UseLiveComponentUpdatesReturn | null;
+  readOnly?: boolean;
 }
 
 const LeftSidebar = React.memo(function LeftSidebar({
@@ -48,6 +50,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
   onPageSelect,
   liveLayerUpdates,
   liveComponentUpdates,
+  readOnly = false,
 }: LeftSidebarProps) {
   // Intentionally NOT subscribing to selectedLayerId here — it's only read
   // inside the asset-select handler. A subscription would re-render the
@@ -71,6 +74,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
 
   const setCurrentPageId = useEditorStore((state) => state.setCurrentPageId);
   const editingComponentId = useEditorStore((state) => state.editingComponentId);
+  const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
   const setActiveSidebarTab = useEditorStore((state) => state.setActiveSidebarTab);
 
   const storeSidebarTab = useEditorStore((state) => state.activeSidebarTab);
@@ -86,11 +90,14 @@ const LeftSidebar = React.memo(function LeftSidebar({
 
   const activeTab = storeSidebarTab || sidebarTab;
 
-  const editingComponentDraft = useComponentsStore((state) =>
-    editingComponentId ? state.componentDrafts[editingComponentId] ?? null : null
-  );
-  const getComponentById = useComponentsStore((state) => state.getComponentById);
+  const componentDrafts = useComponentsStore((state) => state.componentDrafts);
   const updateComponentDraft = useComponentsStore((state) => state.updateComponentDraft);
+  const addVariant = useComponentsStore((state) => state.addVariant);
+  const renameVariant = useComponentsStore((state) => state.renameVariant);
+  const duplicateVariant = useComponentsStore((state) => state.duplicateVariant);
+  const deleteVariant = useComponentsStore((state) => state.deleteVariant);
+  const reorderVariants = useComponentsStore((state) => state.reorderVariants);
+  const setEditingComponentVariantId = useEditorStore((state) => state.setEditingComponentVariantId);
 
   // Collaboration hooks - re-enabled
   const layerLocks = useLayerLocks();
@@ -98,8 +105,11 @@ const LeftSidebar = React.memo(function LeftSidebar({
   const layerLocksRef = useRef(layerLocks);
   layerLocksRef.current = layerLocks;
 
-  // Get component layers if in edit mode
-  const editingComponent = editingComponentId ? getComponentById(editingComponentId) : null;
+  // Subscribe to the actual component object so optimistic updates (e.g.
+  // variant rename) trigger a re-render immediately.
+  const editingComponent = useComponentsStore((state) =>
+    editingComponentId ? state.components.find(c => c.id === editingComponentId) ?? null : null
+  );
 
   // Listen for keyboard shortcut to toggle ElementLibrary
   useEffect(() => {
@@ -145,16 +155,26 @@ const LeftSidebar = React.memo(function LeftSidebar({
     onLayerSelect(layerId);
   }, [onLayerSelect]);
 
+  // Resolve the active variant draft when editing a component, falling back
+  // to the first variant if the URL/state still references a stale variant id.
+  const activeComponentVariantId = useMemo(() => {
+    if (!editingComponentId) return null;
+    const drafts = componentDrafts[editingComponentId];
+    if (!drafts) return editingComponentVariantId || null;
+    if (editingComponentVariantId && drafts[editingComponentVariantId]) return editingComponentVariantId;
+    return Object.keys(drafts)[0] || null;
+  }, [editingComponentId, editingComponentVariantId, componentDrafts]);
+
   const layersForCurrentPage = useMemo(() => {
-    // If editing a component, show component layers instead
-    if (editingComponentId) {
-      return editingComponentDraft || [];
+    // If editing a component, show the active variant's layers.
+    if (editingComponentId && activeComponentVariantId) {
+      return componentDrafts[editingComponentId]?.[activeComponentVariantId] || [];
     }
 
     // Otherwise show page layers
     if (!currentPageId) return [];
     return currentDraft ? currentDraft.layers : [];
-  }, [editingComponentId, editingComponentDraft, currentPageId, currentDraft]);
+  }, [editingComponentId, activeComponentVariantId, componentDrafts, currentPageId, currentDraft]);
 
   // Handle layer reordering from drag & drop
   const handleLayersReorder = useCallback((newLayers: Layer[], movedLayerId?: string) => {
@@ -164,16 +184,16 @@ const LeftSidebar = React.memo(function LeftSidebar({
       layers = resetBindingsAfterMove(layers, movedLayerId);
     }
 
-    // If editing component, update component draft
-    if (editingComponentId) {
-      updateComponentDraft(editingComponentId, layers);
+    // If editing component, update the active variant's draft
+    if (editingComponentId && activeComponentVariantId) {
+      updateComponentDraft(editingComponentId, activeComponentVariantId, layers);
       return;
     }
 
     // Otherwise update page draft
     if (!currentPageId) return;
     setDraftLayers(currentPageId, layers);
-  }, [editingComponentId, updateComponentDraft, currentPageId, setDraftLayers]);
+  }, [editingComponentId, activeComponentVariantId, updateComponentDraft, currentPageId, setDraftLayers]);
 
   // Helper to find layer in tree
   const findLayer = useCallback((layers: Layer[], id: string): { layer: Layer; parentId: string | null } | null => {
@@ -323,10 +343,12 @@ const LeftSidebar = React.memo(function LeftSidebar({
             }}
             className="h-full overflow-hidden gap-0!"
           >
-            <TabsList className="w-full shrink-0">
-              <TabsTrigger value="layers">Layers</TabsTrigger>
-              <TabsTrigger value="pages">Pages</TabsTrigger>
-            </TabsList>
+            {!readOnly && (
+              <TabsList className="w-full shrink-0">
+                <TabsTrigger value="layers">Layers</TabsTrigger>
+                <TabsTrigger value="pages">Pages</TabsTrigger>
+              </TabsList>
+            )}
 
             <hr className="mt-4" />
 
@@ -335,16 +357,65 @@ const LeftSidebar = React.memo(function LeftSidebar({
               value="layers" className="flex flex-col min-h-0"
               forceMount
             >
+              {editingComponentId && editingComponent && (
+                <ComponentVariantsSection
+                  component={editingComponent}
+                  activeVariantId={activeComponentVariantId}
+                  onSelectVariant={(variantId) => {
+                    if (variantId === activeComponentVariantId) return;
+                    setEditingComponentVariantId(variantId);
+                    // The selected layer almost certainly belongs to the
+                    // previous variant's tree. Snap selection to the new
+                    // variant's root so the canvas + right sidebar reflect
+                    // the active variant immediately.
+                    const drafts = componentDrafts[editingComponentId];
+                    const layersForVariant = drafts?.[variantId]
+                      ?? editingComponent.variants?.find(v => v.id === variantId)?.layers
+                      ?? [];
+                    const firstLayerId = layersForVariant[0]?.id ?? null;
+                    onLayerSelect(firstLayerId);
+                  }}
+                  onAddVariant={async () => {
+                    const newId = await addVariant(editingComponentId, activeComponentVariantId);
+                    if (newId) setEditingComponentVariantId(newId);
+                  }}
+                  onRenameVariant={(variantId, name) => renameVariant(editingComponentId, variantId, name)}
+                  onDuplicateVariant={async (variantId) => {
+                    const newId = await duplicateVariant(editingComponentId, variantId);
+                    if (newId) setEditingComponentVariantId(newId);
+                  }}
+                  onReorderVariants={(orderedIds) => reorderVariants(editingComponentId, orderedIds)}
+                  onDeleteVariant={async (variantId) => {
+                    const wasActive = variantId === activeComponentVariantId;
+                    await deleteVariant(editingComponentId, variantId);
+                    // Only switch if the variant was actually removed (API may fail silently)
+                    const updated = useComponentsStore.getState().getComponentById(editingComponentId);
+                    const stillExists = updated?.variants?.some(v => v.id === variantId);
+                    if (wasActive && !stillExists) {
+                      const fallback = updated?.variants?.[0]?.id ?? null;
+                      setEditingComponentVariantId(fallback);
+                      // Snap selection to first layer of the new active variant
+                      const drafts = useComponentsStore.getState().componentDrafts[editingComponentId];
+                      const fallbackLayers = fallback && drafts?.[fallback]
+                        ? drafts[fallback]
+                        : updated?.variants?.[0]?.layers ?? [];
+                      onLayerSelect(fallbackLayers[0]?.id ?? null);
+                    }
+                  }}
+                />
+              )}
               <header className="py-5 flex justify-between shrink-0 z-20">
-                <span className="font-medium">{editingComponentId ? 'Layers' : 'Layers'}</span>
-                <div className="-my-1">
-                  <Button
-                    size="xs" variant="secondary"
-                    onClick={() => setShowElementLibrary(prev => !prev)}
-                  >
-                    <Icon name="plus" className={`${showElementLibrary ? 'rotate-45' : 'rotate-0'} transition-transform duration-100`} />
-                  </Button>
-                </div>
+                <span className="font-medium">Layers</span>
+                {!readOnly && (
+                  <div className="-my-1">
+                    <Button
+                      size="xs" variant="secondary"
+                      onClick={() => setShowElementLibrary(prev => !prev)}
+                    >
+                      <Icon name="plus" className={`${showElementLibrary ? 'rotate-45' : 'rotate-0'} transition-transform duration-100`} />
+                    </Button>
+                  </div>
+                )}
               </header>
 
               <div
@@ -369,6 +440,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
                     pageId={currentPageId || ''}
                     liveLayerUpdates={liveLayerUpdates}
                     liveComponentUpdates={liveComponentUpdates}
+                    readOnly={readOnly}
                   />
                 )}
               </div>
@@ -386,6 +458,7 @@ const LeftSidebar = React.memo(function LeftSidebar({
                 currentPageId={currentPageId}
                 onPageSelect={onPageSelect}
                 setCurrentPageId={setCurrentPageId}
+                readOnly={readOnly}
               />
             </TabsContent>
 

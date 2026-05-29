@@ -3,6 +3,30 @@
  * Centralized helpers for asset type detection, formatting, and categorization
  */
 
+/**
+ * Build a data URL for inline SVG content. When `width`/`height` are provided
+ * and the SVG root lacks them, they're injected so `<img>` consumers get
+ * intrinsic dimensions — otherwise browsers fall back to 300×150 for SVGs
+ * that only carry a viewBox, breaking CSS `w-auto`/`h-auto` sizing.
+ */
+export function buildSvgDataUrl(
+  content: string,
+  width?: number | null,
+  height?: number | null
+): string {
+  let svg = content;
+  if (width && height) {
+    svg = svg.replace(/<svg\b([^>]*)>/i, (match, attrs: string) => {
+      const hasWidth = /\swidth\s*=/i.test(attrs);
+      const hasHeight = /\sheight\s*=/i.test(attrs);
+      if (hasWidth && hasHeight) return match;
+      const injected = `${!hasWidth ? ` width="${width}"` : ''}${!hasHeight ? ` height="${height}"` : ''}`;
+      return `<svg${injected}${attrs}>`;
+    });
+  }
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 import type { AssetCategory, AssetCategoryFilter, Layer, Component, ComponentVariable } from '@/types';
 import {
   ASSET_CATEGORIES,
@@ -375,8 +399,14 @@ export function getOptimizedImageUrl(
 
   try {
     if (isProxyUrl(url)) {
-      const separator = url.includes('?') ? '&' : '?';
-      return `${url}${separator}width=${width}&quality=${quality}`;
+      // Use URL parsing against a dummy base so we can `.set()` rather than
+      // append — the store may have already rewritten `public_url` to include
+      // its own `width`/`quality`, and naive concatenation would emit them
+      // twice (e.g. `?width=1920&quality=80&width=200&quality=80`).
+      const proxyUrl = new URL(url, 'http://localhost');
+      proxyUrl.searchParams.set('width', width.toString());
+      proxyUrl.searchParams.set('quality', quality.toString());
+      return `${proxyUrl.pathname}${proxyUrl.search}`;
     }
 
     const urlObj = new URL(url);
@@ -394,6 +424,12 @@ export function getOptimizedImageUrl(
  * @param url - Original image URL
  * @param sizes - Array of widths in pixels (default: see below)
  * @param quality - Image quality 0-100 (default: 85)
+ * @param intrinsicWidth - Source image natural width. When provided, caps
+ *   variants to it so descriptors match the file the proxy returns (Sharp
+ *   runs with `withoutEnlargement: true`). Without this, a 1512px source
+ *   with a `?width=1920 1920w` descriptor sends a 1512px file: browsers
+ *   then compute `intrinsic = 1512 / (1920/1512) = 1190px` and render the
+ *   image ~21% smaller than intended.
  * @returns Srcset string with multiple size options
  *
  * Default ladder: 320, 480, 640, 750, 828, 1080, 1280, 1536, 1920.
@@ -420,19 +456,32 @@ export function getOptimizedImageUrl(
 export function generateImageSrcset(
   url: string,
   sizes: number[] = [320, 480, 640, 750, 828, 1080, 1280, 1536, 1920],
-  quality: number = DEFAULT_IMAGE_QUALITY
+  quality: number = DEFAULT_IMAGE_QUALITY,
+  intrinsicWidth?: number | null
 ): string {
   if (!isTransformableUrl(url)) return '';
+
+  // Cap descriptors at the source's natural width when known and smaller than
+  // our default top-end. This keeps `descriptor === file actual width` so the
+  // browser's intrinsic-size math stays correct (see param docs above).
+  let effectiveSizes = sizes;
+  if (intrinsicWidth && intrinsicWidth > 0) {
+    const maxDefault = sizes[sizes.length - 1];
+    if (intrinsicWidth < maxDefault) {
+      effectiveSizes = sizes.filter((w) => w < intrinsicWidth);
+      effectiveSizes.push(intrinsicWidth);
+    }
+  }
 
   try {
     if (isProxyUrl(url)) {
       const baseUrl = url.split('?')[0];
-      return sizes
+      return effectiveSizes
         .map((width) => `${baseUrl}?width=${width}&quality=${quality} ${width}w`)
         .join(', ');
     }
 
-    const srcsetEntries = sizes.map((width) => {
+    const srcsetEntries = effectiveSizes.map((width) => {
       const sizeUrl = new URL(url);
       sizeUrl.searchParams.set('width', width.toString());
       sizeUrl.searchParams.set('quality', quality.toString());
@@ -449,6 +498,27 @@ export function generateImageSrcset(
 /** Returns the default responsive sizes attribute. */
 export function getImageSizes(): string {
   return '100vw';
+}
+
+/**
+ * Parse an image dimension attribute into a positive pixel value.
+ * Accepts `"320"` or `"320px"`. Returns null for empty, zero, or non-numeric input,
+ * preventing meaningless `width="0"` attributes from skewing srcset/sizes math.
+ */
+export function parseImageDimension(value: string | number | undefined | null): number | null {
+  if (value == null) return null;
+  const str = String(value).trim();
+  if (!/^\d+(\.\d+)?(px)?$/i.test(str)) return null;
+  const num = parseFloat(str.replace(/px$/i, ''));
+  return num > 0 ? num : null;
+}
+
+/**
+ * Build a responsive `sizes` attribute. With a known intrinsic width, browsers
+ * pick a smaller srcset variant on desktop; without it, fall back to 100vw.
+ */
+export function buildImageSizes(intrinsicWidth: number | null): string {
+  return intrinsicWidth ? `(max-width: 768px) 100vw, ${intrinsicWidth}px` : getImageSizes();
 }
 
 // Semantic layer names / tag overrides whose descendant images are almost

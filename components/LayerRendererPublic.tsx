@@ -15,14 +15,14 @@
 
 import React, { useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import dynamic from 'next/dynamic';
-import type { Layer, Locale, FormSettings, Component, DesignColorVariable } from '@/types';
+import type { Layer, Locale, FormSettings, Component, DesignColorVariable, PasswordProtectionContext } from '@/types';
 import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextContentLayer, getCollectionVariable, filterDisabledSliderLayers } from '@/lib/layer-utils';
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getStaticTextContent, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { isValidLinkSettings, generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, type LinkResolutionContext } from '@/lib/link-utils';
-import { DEFAULT_ASSETS, DEFAULT_IMAGE_QUALITY, computeImageSizes, generateImageSrcset, getOptimizedImageUrl } from '@/lib/asset-utils';
+import { DEFAULT_ASSETS, DEFAULT_IMAGE_QUALITY, computeImageSizes, generateImageSrcset, getOptimizedImageUrl, parseImageDimension } from '@/lib/asset-utils';
 import { resolveInlineVariablesFromData } from '@/lib/inline-variables';
 import { renderRichText, hasBlockElementsWithInlineVariables, getTextStyleClasses, flattenTiptapParagraphs, type RichTextLinkContext, type RenderComponentBlockFn } from '@/lib/text-format-utils';
 import { combineBgValues, mergeStaticBgVars } from '@/lib/tailwind-class-mapper';
@@ -254,6 +254,11 @@ interface LayerRendererPublicProps {
    * the hero image during the HTML parse rather than after CSS/layout.
    */
   lcpCandidateLayerId?: string | null;
+  /**
+   * When set (typically on the 401 error page), a password-protected form layer
+   * uses this context to call the page-auth verify endpoint and redirect on success.
+   */
+  passwordProtection?: PasswordProtectionContext;
 }
 
 const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
@@ -285,6 +290,7 @@ const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
   isSlideChild: isSlideChildProp,
   serverSettings,
   lcpCandidateLayerId,
+  passwordProtection,
 }) => {
   const anchorMap = useMemo(() => {
     return anchorMapProp || buildAnchorMap(layers);
@@ -296,7 +302,7 @@ const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
 
       const originalLayerId = layer.id.replace(/-fragment$/, '');
       const hasFilter = !!layer._filterConfig;
-      const hasPagination = layer._paginationMeta && isPublished;
+      const hasPagination = !!layer._paginationMeta;
 
       if (hasPagination || hasFilter) {
         let content: React.ReactNode = renderedChildren;
@@ -311,6 +317,10 @@ const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
                 collectionLayerId={originalLayerId}
                 itemIds={layer._paginationMeta!.itemIds}
                 layerTemplate={layer._paginationMeta!.layerTemplate}
+                isPreview={isPreview}
+                pageCollectionItemId={pageCollectionItemId}
+                pageCollectionSortedItemIds={pageCollectionSortedItemIds}
+                collectionLayer={layer._filterConfig?.collectionLayer || layer._paginationMeta!.collectionLayer}
               >
                 {content}
               </LoadMoreCollection>
@@ -343,6 +353,10 @@ const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
               collectionLayerClasses={layer._filterConfig!.collectionLayerClasses}
               collectionLayerTag={layer._filterConfig!.collectionLayerTag}
               isPublished={layer._filterConfig!.isPublished}
+              isPreview={isPreview}
+              pageCollectionItemId={pageCollectionItemId}
+              pageCollectionSortedItemIds={pageCollectionSortedItemIds}
+              collectionLayer={layer._filterConfig!.collectionLayer}
             >
               {content}
             </FilterableCollection>
@@ -390,6 +404,7 @@ const LayerRendererPublic: React.FC<LayerRendererPublicProps> = ({
         isSlideChild={isSlideChildProp}
         serverSettings={serverSettings}
         lcpCandidateLayerId={lcpCandidateLayerId}
+        passwordProtection={passwordProtection}
       />
     );
   };
@@ -431,6 +446,7 @@ const LayerItem: React.FC<{
   isSlideChild?: boolean;
   serverSettings?: Record<string, unknown>;
   lcpCandidateLayerId?: string | null;
+  passwordProtection?: PasswordProtectionContext;
 }> = ({
   layer,
   isPublished,
@@ -460,6 +476,7 @@ const LayerItem: React.FC<{
   isSlideChild,
   serverSettings,
   lcpCandidateLayerId,
+  passwordProtection,
 }) => {
   const classesString = getClassesString(layer);
   const collectionLayerItemId = layer._collectionItemId || collectionItemId;
@@ -517,7 +534,8 @@ const LayerItem: React.FC<{
     components: componentsProp,
     serverSettings,
     lcpCandidateLayerId,
-  }), [isPublished, pageId, collectionLayerData, collectionLayerItemId, effectiveLayerDataMap, pageCollectionItemId, pageCollectionItemData, pageCollectionSortedItemIds, hiddenLayerInfo, currentLocale, availableLocales, localeSelectorFormat, isInsideForm, isInsideLink, parentFormSettings, pages, folders, collectionItemSlugs, isPreview, translations, anchorMap, resolvedAssets, componentsProp, serverSettings, lcpCandidateLayerId]);
+    passwordProtection,
+  }), [isPublished, pageId, collectionLayerData, collectionLayerItemId, effectiveLayerDataMap, pageCollectionItemId, pageCollectionItemData, pageCollectionSortedItemIds, hiddenLayerInfo, currentLocale, availableLocales, localeSelectorFormat, isInsideForm, isInsideLink, parentFormSettings, pages, folders, collectionItemSlugs, isPreview, translations, anchorMap, resolvedAssets, componentsProp, serverSettings, lcpCandidateLayerId, passwordProtection]);
 
   const renderComponentBlock: RenderComponentBlockFn = useCallback(
     (comp, resolvedLayers, _overrides, key, innerAncestorIds) => {
@@ -556,26 +574,28 @@ const LayerItem: React.FC<{
   const textVariable = layer.variables?.text;
   let useSpanForParagraphs = false;
 
-  if (!isSimpleTextLayer) {
-    const restrictiveBlockTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'button'];
-    const isRestrictiveTag = restrictiveBlockTags.includes(htmlTag);
+  // Detect block-level expansion (lists, tables, headings, embedded components,
+  // or a rich_text CMS variable that expands to blocks). This decides both the
+  // wrapper tag and whether the content can be flattened to a single paragraph.
+  const hasBlockExpansion = textVariable?.type === 'dynamic_rich_text'
+    ? hasBlockElementsWithInlineVariables(
+        textVariable as any,
+        collectionLayerData,
+        pageCollectionItemData || undefined,
+    )
+    : false;
 
-    if (isRestrictiveTag) {
-      let hasLists = false;
+  const restrictiveBlockTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'a', 'button'];
+  const isRestrictiveTag = restrictiveBlockTags.includes(htmlTag);
 
-      if (textVariable?.type === 'dynamic_rich_text') {
-        hasLists = hasBlockElementsWithInlineVariables(
-          textVariable as any,
-          collectionLayerData,
-          pageCollectionItemData || undefined
-        );
-      }
-
-      if (hasLists) {
-        htmlTag = 'div';
-      } else if (textVariable?.type === 'dynamic_rich_text' || (textVariable as any)?.id) {
-        useSpanForParagraphs = true;
-      }
+  if (isRestrictiveTag) {
+    if (hasBlockExpansion) {
+      // Block-level expansion cannot live inside <p>/<h*>/<span>; switch the
+      // wrapper to a <div> regardless of whether this is a simple text layer
+      // or a richText layer.
+      htmlTag = 'div';
+    } else if (!isSimpleTextLayer && (textVariable?.type === 'dynamic_rich_text' || (textVariable as any)?.id)) {
+      useSpanForParagraphs = true;
     }
   }
 
@@ -706,10 +726,15 @@ const LayerItem: React.FC<{
 
     // DynamicRichTextVariable format (with formatting)
     if (textVariable?.type === 'dynamic_rich_text') {
-      const variable = isSimpleTextLayer
+      // Simple text layers (text/heading) normally collapse all paragraphs
+      // into one to fit the layer's single-tag wrapper. Skip flattening when
+      // the content expands to block elements (e.g. a CMS rich_text variable
+      // resolving to headings/tables/lists), otherwise that formatting is lost.
+      const shouldFlatten = isSimpleTextLayer && !hasBlockExpansion;
+      const variable = shouldFlatten
         ? { ...textVariable, data: { ...textVariable.data, content: flattenTiptapParagraphs(textVariable.data.content) } }
         : textVariable;
-      return renderRichText(variable as any, collectionLayerData, pageCollectionItemData || undefined, layer.textStyles, useSpanForParagraphs, false, linkContext, timezone, effectiveLayerDataMap, allComponents, renderComponentBlock, effectiveAncestorIds, isSimpleTextLayer);
+      return renderRichText(variable as any, collectionLayerData, pageCollectionItemData || undefined, layer.textStyles, useSpanForParagraphs, false, linkContext, timezone, effectiveLayerDataMap, allComponents, renderComponentBlock, effectiveAncestorIds, shouldFlatten);
     }
 
     // Check for inline variables in DynamicTextVariable format (legacy)
@@ -818,14 +843,32 @@ const LayerItem: React.FC<{
     ? getTextStyleClasses(layer.textStyles, 'paragraph')
     : '';
 
-  // <a> with display:flex is block-level (full width) unlike <button> which
-  // shrink-wraps. Add w-fit to match button sizing unless width is explicit.
+  // `<button>` defaults to `display: inline-block` (shrink-wraps) and
+  // `text-align: center`, while `<a>` defaults to `display: inline` and inherits
+  // text-align (typically left). When a button-with-link is rendered as `<a>`,
+  // re-apply those button defaults so layout matches:
+  // - `w-fit`: only if no explicit width or block-level display class is set,
+  //   since those make the element block-level (full width) on purpose.
+  // - `text-center`: only if no explicit text-align class is set.
+  const BLOCK_DISPLAY_CLASSES = new Set([
+    'flex', 'block', 'grid', 'table', 'flow-root',
+  ]);
+  const TEXT_ALIGN_CLASSES = new Set([
+    'text-left', 'text-center', 'text-right', 'text-justify', 'text-start', 'text-end',
+  ]);
+  const layerClassList = isButtonWithLink
+    ? (Array.isArray(layer.classes) ? layer.classes : (layer.classes || '').split(' '))
+    : [];
   const buttonNeedsFit = isButtonWithLink && (() => {
-    const cls = Array.isArray(layer.classes) ? layer.classes : (layer.classes || '').split(' ');
-    return !cls.some((c: string) => /^w-/.test(c.split(':').pop() || ''));
+    const hasWidth = layerClassList.some((c: string) => /^w-/.test(c.split(':').pop() || ''));
+    if (hasWidth) return false;
+    const hasBlockDisplay = layerClassList.some((c: string) => BLOCK_DISPLAY_CLASSES.has(c.split(':').pop() || ''));
+    return !hasBlockDisplay;
   })();
+  const buttonNeedsTextCenter = isButtonWithLink
+    && !layerClassList.some((c: string) => TEXT_ALIGN_CLASSES.has(c.split(':').pop() || ''));
 
-  const fullClassName = clsx(classesString, paragraphClasses, SWIPER_CLASS_MAP[layer.name], isSlideChild && 'swiper-slide', buttonNeedsFit && 'w-fit');
+  const fullClassName = clsx(classesString, paragraphClasses, SWIPER_CLASS_MAP[layer.name], isSlideChild && 'swiper-slide', buttonNeedsFit && 'w-fit', buttonNeedsTextCenter && 'text-center');
 
   if (layer.settings?.hidden) {
     return null;
@@ -1104,9 +1147,11 @@ const LayerItem: React.FC<{
       // Use default image if URL is empty or invalid
       const finalImageUrl = imageUrl && imageUrl.trim() !== '' ? imageUrl : DEFAULT_ASSETS.IMAGE;
 
-      // Resolve intrinsic dimensions: explicit attributes > asset record > URL reverse-lookup
-      let imgWidth = layer.attributes?.width != null ? String(layer.attributes.width) : undefined;
-      let imgHeight = layer.attributes?.height != null ? String(layer.attributes.height) : undefined;
+      // Resolve intrinsic dimensions: explicit attributes > asset record > URL reverse-lookup.
+      // Zero/invalid attribute values are ignored so the asset fallback still runs
+      // (e.g. when a layer stores width="0" from an older bug or manual edit).
+      let imgWidth: string | undefined = parseImageDimension(layer.attributes?.width as string | number | undefined)?.toString();
+      let imgHeight: string | undefined = parseImageDimension(layer.attributes?.height as string | number | undefined)?.toString();
 
       if (!imgWidth || !imgHeight) {
         const assetId = isAssetVariable(imageVariable) ? getAssetId(imageVariable) : undefined;
@@ -1134,7 +1179,16 @@ const LayerItem: React.FC<{
       const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, DEFAULT_IMAGE_QUALITY);
-      const srcset = generateImageSrcset(finalImageUrl);
+
+      // Pass intrinsic width so srcset descriptors don't exceed the source's
+      // natural size (the proxy won't upscale; mismatched descriptors break
+      // browser intrinsic-dimension math and shrink the rendered image).
+      const intrinsicWidth = parseImageDimension(imgWidth);
+      const srcset = generateImageSrcset(finalImageUrl, undefined, undefined, intrinsicWidth);
+      // Use the class-based heuristic from computeImageSizes (fork-specific PSI
+      // optimization) — covers explicit sizes, portrait-contain, w-full hero
+      // patterns, and small-image thresholds; falls through to buildImageSizes
+      // shape for the common known-width case.
       const sizes = computeImageSizes(layer.attributes, classesString, imgWidth, imgHeight);
 
       const imageProps: Record<string, any> = {
@@ -1144,8 +1198,12 @@ const LayerItem: React.FC<{
         decoding: 'async',
       };
 
-      if (imgWidth) imageProps.width = imgWidth;
-      if (imgHeight) imageProps.height = imgHeight;
+      // Set only positive intrinsic values; otherwise drop any `width="0"`/
+      // `height="0"` that leaked in via normalizedAttributes.
+      if (intrinsicWidth) imageProps.width = intrinsicWidth;
+      else delete imageProps.width;
+      if (intrinsicHeight) imageProps.height = intrinsicHeight;
+      else delete imageProps.height;
       if (effectiveLoading) imageProps.loading = effectiveLoading;
       if (isLcpCandidate) imageProps.fetchPriority = 'high';
 
@@ -1222,11 +1280,62 @@ const LayerItem: React.FC<{
     if (htmlTag === 'form') {
       const formId = layer.settings?.id;
       const formSettings = layer.settings?.form;
+      const isPasswordForm = formSettings?.form_type === 'password_protected';
 
       elementProps.onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
 
         const form = e.currentTarget;
+
+        // Password-protected forms gate access to locked pages via /api/page-auth/verify.
+        // The standard /ycode/api/form-submissions path is skipped entirely.
+        if (isPasswordForm) {
+          const passwordInput =
+            form.querySelector<HTMLInputElement>('input[type="password"][name="password"]')
+            || form.querySelector<HTMLInputElement>('input[name="password"]')
+            || form.querySelector<HTMLInputElement>('input[type="password"]');
+          const submittedPassword = passwordInput?.value ?? '';
+
+          const errorAlert = form.querySelector('[data-alert-type="error"]') as HTMLElement | null;
+          const successAlert = form.querySelector('[data-alert-type="success"]') as HTMLElement | null;
+          if (errorAlert) errorAlert.style.display = 'none';
+          if (successAlert) successAlert.style.display = 'none';
+
+          try {
+            const response = await fetch('/api/page-auth/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                pageId: passwordProtection?.pageId,
+                folderId: passwordProtection?.folderId,
+                password: submittedPassword,
+                redirectUrl: passwordProtection?.redirectUrl
+                  ?? (typeof window !== 'undefined' ? window.location.pathname : '/'),
+                isPublished: passwordProtection?.isPublished ?? true,
+              }),
+            });
+
+            const data = await response.json().catch(() => ({}));
+
+            if (response.ok) {
+              const target = data?.redirectUrl;
+              if (target && typeof window !== 'undefined') {
+                window.location.href = target;
+              } else if (typeof window !== 'undefined') {
+                window.location.reload();
+              }
+              return;
+            }
+
+            if (errorAlert) errorAlert.style.display = '';
+            if (passwordInput) passwordInput.value = '';
+          } catch (error) {
+            console.error('Password verification error:', error);
+            if (errorAlert) errorAlert.style.display = '';
+          }
+          return;
+        }
+
         const formData = new FormData(form);
         const payload: Record<string, any> = {};
 

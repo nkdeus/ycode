@@ -1,5 +1,7 @@
 import { redirect, permanentRedirect } from 'next/navigation';
+import { connection } from 'next/server';
 import { unstable_cache } from 'next/cache';
+import { addCacheTag } from '@vercel/functions';
 import Link from 'next/link';
 import { fetchHomepage, fetchErrorPage, splitPageData, reassemblePageData, slimPageData } from '@/lib/page-fetcher';
 import type { PageData } from '@/lib/page-fetcher';
@@ -21,7 +23,15 @@ export const revalidate = false; // Cache indefinitely until publish invalidates
  * Cached with tag-based revalidation (no time-based stale cache)
  */
 async function fetchPublishedHomepage() {
-  const tags = ['all-pages', 'route-/'];
+  // Tags are both 'route-/' AND 'all-pages':
+  // - route-/ lets selective invalidation purge just this page's data cache
+  // - all-pages lets full invalidation (color variables, redirects, etc.)
+  //   sweep every page's data cache in one invalidateByTag call.
+  // Vercel's invalidateByTag is tag-precise, so no cascade — selective
+  // invalidation of one route doesn't disturb others. (Next.js bug #63509
+  // would apply if we used revalidateTag for selective on Vercel, but we
+  // route exclusively through invalidateByTag here.)
+  const tags = ['route-/', 'all-pages'];
   const opts = { tags, revalidate: false as const };
 
   const [core, layers] = await Promise.all([
@@ -108,6 +118,11 @@ async function fetchCachedErrorPage(errorCode: 401) {
 }
 
 export default async function Home() {
+  // Tag this response for Vercel CDN cache invalidation. The publish endpoint
+  // purges this exact tag (route-/) so only the homepage cache entry is
+  // invalidated. No-ops outside Vercel.
+  await addCacheTag(['route-/', 'all-pages']);
+
   // Check for redirects targeting the homepage
   const redirects = await fetchCachedRedirects();
   if (redirects && Array.isArray(redirects)) {
@@ -173,13 +188,17 @@ export default async function Home() {
   // Load all global settings early so error pages also get global custom code
   const globalSettings = await fetchCachedGlobalSettings();
 
+  // Per-page CSS with fallback to global published_css
+  const cssForPage = data.generatedCss || globalSettings.publishedCss || undefined;
+
   // Check password protection for homepage.
   // First evaluate without cookies() so non-protected pages can stay cacheable.
   const folders = await fetchCachedFoldersForAuth();
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
-  // If homepage is protected, read auth cookie and re-check unlock state.
+  // If homepage is protected, opt into dynamic rendering and read the auth cookie.
   if (protectionCheck.isProtected) {
+    await connection();
     const authCookie = await parseAuthCookie();
     const protection = getPasswordProtection(data.page, folders, authCookie);
 
@@ -234,7 +253,7 @@ export default async function Home() {
       page={data.page}
       layers={data.pageLayers.layers || []}
       components={data.components}
-      generatedCss={globalSettings.publishedCss || undefined}
+      generatedCss={cssForPage}
       colorVariablesCss={globalSettings.colorVariablesCss || undefined}
       locale={data.locale}
       availableLocales={data.availableLocales}
@@ -262,21 +281,18 @@ export async function generateMetadata(): Promise<Metadata> {
     };
   }
 
-  // Check password protection - don't leak metadata for protected pages.
-  // First check without cookies() to avoid forcing dynamic metadata for public pages.
+  // Don't leak metadata for protected pages. Checking without cookies keeps
+  // generateMetadata fully static — no need to verify unlock state here since
+  // the page component handles access gating.
   const folders = await fetchCachedFoldersForAuth();
   const protectionCheck = getPasswordProtection(data.page, folders, null);
 
   if (protectionCheck.isProtected) {
-    const authCookie = await parseAuthCookie();
-    const protection = getPasswordProtection(data.page, folders, authCookie);
-    if (!protection.isUnlocked) {
-      return {
-        title: 'Password Protected',
-        description: 'This page is password protected.',
-        robots: { index: false, follow: false },
-      };
-    }
+    return {
+      title: 'Password Protected',
+      description: 'This page is password protected.',
+      robots: { index: false, follow: false },
+    };
   }
 
   const { meta, baseUrl } = await unstable_cache(
@@ -289,7 +305,7 @@ export async function generateMetadata(): Promise<Metadata> {
       baseUrl: getSiteBaseUrl({ globalCanonicalUrl: globalSettings.globalCanonicalUrl }),
     }),
     ['data-for-route-/-meta'],
-    { tags: ['all-pages', 'route-/'], revalidate: false }
+    { tags: ['route-/', 'all-pages'], revalidate: false }
   )();
 
   if (baseUrl) {
