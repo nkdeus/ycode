@@ -34,7 +34,7 @@ import MigrationChecker from '@/components/MigrationChecker';
 import BuilderLoading from '@/components/BuilderLoading';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
-import { checkCircularReference } from '@/lib/component-utils';
+import { checkCircularReference, detachSpecificLayerFromComponent } from '@/lib/component-utils';
 
 // Right sidebar is always visible in editor mode - load eagerly to avoid delay
 import RightSidebar from '../components/RightSidebar';
@@ -64,6 +64,7 @@ import { useClipboardStore } from '@/stores/useClipboardStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore, consumePageMcpSync } from '@/stores/usePagesStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
+import { useCanvasTextEditorStore } from '@/stores/useCanvasTextEditorStore';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useCollaborationPresenceStore, getResourceLockKey, RESOURCE_TYPES } from '@/stores/useCollaborationPresenceStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
@@ -74,12 +75,16 @@ import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { useMigrationStore } from '@/stores/useMigrationStore';
 import { useVersionsStore } from '@/stores/useVersionsStore';
 import { useRole } from '@/hooks/use-role';
+import { useImportPaste } from '@/hooks/use-import-paste';
+import type { ExternalPastePlacement } from '@/stores/useExternalPasteStore';
 // Collaboration temporarily disabled
 // import { useCollaborationPresenceStore } from '@/stores/useCollaborationPresenceStore';
 
 // 6. Utils/lib
 import { findHomepage } from '@/lib/page-utils';
-import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, LINK_NESTING_ERROR } from '@/lib/layer-utils';
+import { hasTextSelection } from '@/lib/utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
+import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, canHaveChildren, LINK_NESTING_ERROR } from '@/lib/layer-utils';
 import { cloneDeep } from 'lodash';
 
 // 5. Types
@@ -154,8 +159,11 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   const pages = usePagesStore((state) => state.pages);
 
   const clipboardLayer = useClipboardStore((state) => state.clipboardLayer);
+  const clipboardLayers = useClipboardStore((state) => state.clipboardLayers);
   const copyToClipboard = useClipboardStore((state) => state.copyLayer);
   const cutToClipboard = useClipboardStore((state) => state.cutLayer);
+  const copyLayersToClipboard = useClipboardStore((state) => state.copyLayers);
+  const cutLayersToClipboard = useClipboardStore((state) => state.cutLayers);
   const copyStyleToClipboard = useClipboardStore((state) => state.copyStyle);
   const pasteStyleFromClipboard = useClipboardStore((state) => state.pasteStyle);
 
@@ -264,6 +272,221 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
       setDraftLayers(currentPageId, newLayers);
     }
   }, [editingComponentId, editingComponentVariantId, currentPageId, setDraftLayers]);
+
+  // Import paste: insert layers produced by an import (Webflow / Figma).
+  // Placement mirrors Ycode's own copy/paste: insert inside the selected layer
+  // when it can hold children, otherwise drop in as a sibling next to it; with
+  // nothing suitable selected, fall back to the page root (body).
+  const insertImportedLayers = useCallback((layers: Layer[], placement?: ExternalPastePlacement) => {
+    if (layers.length === 0 || !canEditStructure) return;
+
+    // Explicit placement from the context menu's "Paste after / inside": honour
+    // the chosen position relative to the target layer instead of the default
+    // selection-based heuristic below.
+    if (placement) {
+      if (editingComponentId) {
+        const circularError = checkCircularReference(editingComponentId, layers, components);
+        if (circularError) {
+          toast.error('Infinite component loop detected', { description: circularError });
+          return;
+        }
+        const currentLayers = getCurrentLayers();
+        const target = findLayerById(currentLayers, placement.layerId);
+        if (!target) return;
+
+        let updated: Layer[];
+        if (placement.mode === 'inside') {
+          if (layers.some(l => !canPasteIntoParent(currentLayers, target.id, l))) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          updated = updateLayerProps(currentLayers, target.id, {
+            children: [...(target.children || []), ...layers],
+          });
+        } else {
+          const result = findParentAndIndex(currentLayers, target.id);
+          if (!result) return;
+          if (
+            result.parent &&
+            layers.some(l => !canPasteIntoParent(currentLayers, result.parent!.id, l))
+          ) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          updated = currentLayers;
+          let index = result.index;
+          for (const layer of layers) {
+            updated = insertLayerAfter(updated, result.parent, index, layer);
+            index += 1;
+          }
+        }
+        updateCurrentLayers(updated);
+        setSelectedLayerId(layers[0].id);
+        return;
+      }
+
+      if (!currentPageId) return;
+      if (placement.mode === 'inside') {
+        for (const layer of layers) {
+          if (!pasteInside(currentPageId, placement.layerId, layer)) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+        }
+      } else {
+        let anchorId = placement.layerId;
+        for (const layer of layers) {
+          const pasted = pasteAfter(currentPageId, anchorId, layer);
+          if (!pasted) {
+            toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+            return;
+          }
+          anchorId = pasted.id;
+        }
+      }
+      setSelectedLayerId(layers[0].id);
+      return;
+    }
+
+    const selectedId = selectedLayerIdRef.current;
+
+    // Component editor: the store paste actions are page-scoped, so operate
+    // directly on the component's layer tree using the same rules.
+    if (editingComponentId) {
+      const circularError = checkCircularReference(editingComponentId, layers, components);
+      if (circularError) {
+        toast.error('Infinite component loop detected', { description: circularError });
+        return;
+      }
+      const currentLayers = getCurrentLayers();
+      const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+      let updated: Layer[];
+      if (selected && canHaveChildren(selected)) {
+        const appendInto = (nodes: Layer[]): Layer[] =>
+          nodes.map(node =>
+            node.id === selected.id
+              ? { ...node, children: [...(node.children || []), ...layers] }
+              : node.children && node.children.length > 0
+                ? { ...node, children: appendInto(node.children) }
+                : node,
+          );
+        updated = appendInto(currentLayers);
+      } else if (selected) {
+        const result = findParentAndIndex(currentLayers, selected.id);
+        if (
+          result?.parent &&
+          layers.some(l => !canPasteIntoParent(currentLayers, result.parent!.id, l))
+        ) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        const parent = result?.parent ?? null;
+        let index = result ? result.index : currentLayers.length - 1;
+        updated = currentLayers;
+        for (const layer of layers) {
+          updated = insertLayerAfter(updated, parent, index, layer);
+          index += 1;
+        }
+      } else {
+        updated = [...currentLayers, ...layers];
+      }
+
+      updateCurrentLayers(updated);
+      setSelectedLayerId(layers[0].id);
+      return;
+    }
+
+    if (!currentPageId) return;
+
+    const currentLayers = getCurrentLayers();
+    const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+    if (!selected || canHaveChildren(selected)) {
+      // Inside the selected container — or the page root when nothing usable
+      // is selected. pasteInside appends in order, preserving layer sequence.
+      const targetId = selected
+        ? selected.id
+        : currentLayers.find(l => l.id === 'body' || l.name === 'body')?.id ?? 'body';
+      for (const layer of layers) {
+        if (!pasteInside(currentPageId, targetId, layer)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+      }
+    } else {
+      // Selected layer can't hold children — drop in next to it. Chain the
+      // anchor through each pasted layer so the original order is kept.
+      let anchorId = selected.id;
+      for (const layer of layers) {
+        const pasted = pasteAfter(currentPageId, anchorId, layer);
+        if (!pasted) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        anchorId = pasted.id;
+      }
+    }
+
+    setSelectedLayerId(layers[0].id);
+  }, [canEditStructure, editingComponentId, components, currentPageId, getCurrentLayers, updateCurrentLayers, setSelectedLayerId, pasteInside, pasteAfter]);
+
+  // Normal Ycode paste (internal clipboard) — extracted from keydown so it
+  // can run inside the paste event handler after Figma detection fails.
+  const handleNormalPaste = useCallback(() => {
+    if (!canEditStructure) return;
+    const selectedLayerId = selectedLayerIdRef.current;
+    // In-memory fallback for when the OS clipboard bundle couldn't be written
+    // (denied/too large). Supports the full multi-select selection.
+    const layersToPaste = clipboardLayers.length > 0
+      ? clipboardLayers
+      : clipboardLayer
+        ? [clipboardLayer]
+        : [];
+    if (layersToPaste.length === 0 || !selectedLayerId) return;
+
+    if (editingComponentId) {
+      let working = getCurrentLayers();
+      let anchorId = selectedLayerId;
+      for (const source of layersToPaste) {
+        const circularError = checkCircularReference(editingComponentId, source, components);
+        if (circularError) {
+          toast.error('Infinite component loop detected', { description: circularError });
+          return;
+        }
+        const result = findParentAndIndex(working, anchorId);
+        if (!result) break;
+        if (result.parent && !canPasteIntoParent(working, result.parent.id, source)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(source));
+        working = insertLayerAfter(working, result.parent, result.index, newLayer);
+        anchorId = newLayer.id;
+      }
+      updateCurrentLayers(working);
+    } else if (currentPageId) {
+      let anchorId = selectedLayerId;
+      for (const source of layersToPaste) {
+        const pastedLayer = anchorId === 'body'
+          ? pasteInside(currentPageId, anchorId, source)
+          : pasteAfter(currentPageId, anchorId, source);
+        if (!pastedLayer) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        // Chain subsequent layers after the one just pasted (unless pasting
+        // into body, where order is preserved by appending).
+        if (anchorId !== 'body') anchorId = pastedLayer.id;
+      }
+    }
+  }, [canEditStructure, clipboardLayer, clipboardLayers, editingComponentId, components, getCurrentLayers, updateCurrentLayers, currentPageId, pasteInside, pasteAfter]);
+
+  useImportPaste({
+    enabled: !!(currentPageId || editingComponentId),
+    insertLayers: insertImportedLayers,
+    onNormalPaste: handleNormalPaste,
+  });
 
   // Check if Supabase is configured, redirect to setup if not
   const [supabaseConfigured, setSupabaseConfigured] = useState<boolean | null>(null);
@@ -582,6 +805,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             // Load color variables
             const { useColorVariablesStore } = await import('@/stores/useColorVariablesStore');
             asyncTasks.push(useColorVariablesStore.getState().loadColorVariables());
+
+            // Load global variables (available as a binding source everywhere)
+            const { useGlobalsStore } = await import('@/stores/useGlobalsStore');
+            asyncTasks.push(useGlobalsStore.getState().loadGlobals());
 
             // Wait for all async tasks to complete
             if (asyncTasks.length > 0) {
@@ -1104,7 +1331,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
   // Exit component edit mode handler
   const handleExitComponentEditMode = useCallback(async () => {
     const { editingComponentId, returnToPageId, setEditingComponentId, returnToLayerId, getReturnDestination, setSelectedLayerId: setLayerIdFromStore } = useEditorStore.getState();
-    const { saveComponentDraft, clearComponentDraft, getComponentById, saveTimeouts, loadComponentDraft } = useComponentsStore.getState();
+    const { saveComponentDraft, clearComponentDraft, getComponentById, loadComponentDraft } = useComponentsStore.getState();
     const { updateComponentOnLayers } = usePagesStore.getState();
 
     if (!editingComponentId || isExitingComponentModeRef.current) return;
@@ -1113,9 +1340,23 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     isExitingComponentModeRef.current = true;
 
     try {
-      // Clear any pending auto-save timeout to avoid duplicate saves
-      if (saveTimeouts[editingComponentId]) {
-        clearTimeout(saveTimeouts[editingComponentId]);
+      // Inline text editing commits its content lazily (on blur/unmount), so a
+      // pending edit hasn't reached the component draft yet. Finish it now —
+      // while edit mode is still active — so the latest content is written into
+      // the draft (and marks it dirty) before we save below. Without this the
+      // first exit persists stale content and the edit only "sticks" on a
+      // subsequent attempt once the editor has already flushed.
+      const { isEditing, requestFinish } = useCanvasTextEditorStore.getState();
+      if (isEditing) {
+        requestFinish();
+      }
+
+      // Clear any pending auto-save timeout to avoid duplicate saves. Read it
+      // fresh because finishing inline editing above may have scheduled a new
+      // one via updateComponentDraft.
+      const pendingSaveTimeout = useComponentsStore.getState().saveTimeouts[editingComponentId];
+      if (pendingSaveTimeout) {
+        clearTimeout(pendingSaveTimeout);
       }
 
       // Capture whether this draft has any unpersisted edits before saving,
@@ -1258,6 +1499,13 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         if (currentPageId) {
           saveImmediately(currentPageId);
         }
+      }
+
+      // Open preview: Cmd/Ctrl + P — handled by HeaderBar via custom event
+      if ((e.metaKey || e.ctrlKey) && e.key === 'p') {
+        e.preventDefault(); // Prevent the browser print dialog
+        window.dispatchEvent(new CustomEvent('togglePreview'));
+        return;
       }
 
       // Note: Undo/Redo shortcuts (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, Cmd/Ctrl+Y) are handled in CenterCanvas.tsx
@@ -1466,8 +1714,9 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Copy: Cmd/Ctrl + C (supports multi-select)
+        // Skip when the user has a plain-text selection so native copy works.
         if ((e.metaKey || e.ctrlKey) && e.key === 'c' && !isContentOnlyRole) {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
+          if (!isInputFocused && !hasTextSelection() && (currentPageId || editingComponentId)) {
             e.preventDefault();
 
             // Get layers from the correct context
@@ -1483,12 +1732,12 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
                 if (editingComponentId) {
                   const copiedLayers = layersToCheck.map(l => cloneDeep(l));
                   if (copiedLayers.length > 0) {
-                    copyToClipboard(copiedLayers[0], currentPageId || '');
+                    copyLayersToClipboard(copiedLayers, currentPageId || '');
                   }
                 } else if (currentPageId) {
                   const copiedLayers = copyLayersFromStore(currentPageId, selectedLayerIds);
                   if (copiedLayers.length > 0) {
-                    copyToClipboard(copiedLayers[0], currentPageId);
+                    copyLayersToClipboard(copiedLayers, currentPageId);
                   }
                 }
               }
@@ -1511,8 +1760,9 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Cut: Cmd/Ctrl + X (supports multi-select)
+        // Skip when the user has a plain-text selection so native cut works.
         if ((e.metaKey || e.ctrlKey) && e.key === 'x' && !isContentOnlyRole) {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
+          if (!isInputFocused && !hasTextSelection() && (currentPageId || editingComponentId)) {
             e.preventDefault();
 
             // Get layers from the correct context
@@ -1528,7 +1778,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
                 if (editingComponentId) {
                   const copiedLayers = layersToCheck.map(l => cloneDeep(l));
                   if (copiedLayers.length > 0) {
-                    cutToClipboard(copiedLayers[0], currentPageId || '');
+                    cutLayersToClipboard(copiedLayers, currentPageId || '');
                     // Remove layers from component draft
                     let newLayers = layers;
                     for (const layerId of selectedLayerIds) {
@@ -1540,7 +1790,7 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
                 } else if (currentPageId) {
                   const copiedLayers = copyLayersFromStore(currentPageId, selectedLayerIds);
                   if (copiedLayers.length > 0) {
-                    cutToClipboard(copiedLayers[0], currentPageId);
+                    cutLayersToClipboard(copiedLayers, currentPageId);
                     deleteLayers(currentPageId, selectedLayerIds);
                     clearSelection();
 
@@ -1582,44 +1832,9 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Paste: Cmd/Ctrl + V
-        if ((e.metaKey || e.ctrlKey) && e.key === 'v' && !isContentOnlyRole) {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
-            e.preventDefault();
-            // Use clipboard store for paste (works with context menu)
-            if (clipboardLayer && selectedLayerId) {
-              // In component edit mode, paste into component drafts
-              if (editingComponentId) {
-                const circularError = checkCircularReference(editingComponentId, clipboardLayer, components);
-                if (circularError) {
-                  toast.error('Infinite component loop detected', { description: circularError });
-                  return;
-                }
-
-                const layers = getCurrentLayers();
-                const result = findParentAndIndex(layers, selectedLayerId);
-                if (result) {
-                  if (result.parent && !canPasteIntoParent(layers, result.parent.id, clipboardLayer)) {
-                    toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
-                    return;
-                  }
-                  const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
-                  updateCurrentLayers(insertLayerAfter(layers, result.parent, result.index, newLayer));
-                }
-              } else if (currentPageId) {
-                // If body is selected, paste inside body (not after it)
-                let pastedLayer: Layer | null;
-                if (selectedLayerId === 'body') {
-                  pastedLayer = pasteInside(currentPageId, selectedLayerId, clipboardLayer);
-                } else {
-                  pastedLayer = pasteAfter(currentPageId, selectedLayerId, clipboardLayer);
-                }
-                if (!pastedLayer && clipboardLayer) {
-                  toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
-                }
-              }
-            }
-          }
-        }
+        // Don't preventDefault here — let the browser fire the paste event so
+        // the paste handler (use-import-paste) can read clipboardData. Webflow,
+        // Figma and normal internal paste are all handled there.
 
         // Duplicate: Cmd/Ctrl + D (supports multi-select)
         if ((e.metaKey || e.ctrlKey) && e.key === 'd' && !isContentOnlyRole) {
@@ -1753,7 +1968,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             const layer = findLayerById(layers, selectedLayerId);
             if (layer) {
               const classes = getClassesString(layer);
-              copyStyleToClipboard(classes, layer.design, layer.styleId, layer.styleOverrides);
+              const ids = getStyleIds(layer);
+              copyStyleToClipboard(classes, layer.design, ids[0], layer.styleOverrides, ids);
             }
           }
         }
@@ -1768,8 +1984,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
               const styleProps = {
                 classes: style.classes,
                 design: style.design,
-                styleId: style.styleId,
+                styleId: style.styleIds?.[0] ?? style.styleId,
+                styleIds: style.styleIds ?? (style.styleId ? [style.styleId] : undefined),
                 styleOverrides: style.styleOverrides,
+                styleOverridesByStyle: undefined,
               };
 
               if (editingComponentId) {
@@ -1803,47 +2021,15 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             if (layer?.componentId) {
               const { getComponentById } = useComponentsStore.getState();
               const component = getComponentById(layer.componentId);
-
-              if (!component || !component.layers || component.layers.length === 0) {
-                // If component not found or has no layers, just remove the componentId
-                updateLayer(currentPageId, selectedLayerId, {
-                  componentId: undefined,
-                  componentOverrides: undefined,
-                });
-              } else {
-                // Replace layer with component's layers (detach)
-                const detachDraft = usePagesStore.getState().draftsByPageId[currentPageId];
-                if (detachDraft) {
-                  const replaceLayerWithComponentLayers = (layers: Layer[]): Layer[] => {
-                    return layers.flatMap(currentLayer => {
-                      if (currentLayer.id === selectedLayerId) {
-                        // Deep clone and regenerate IDs
-                        const clonedLayers = JSON.parse(JSON.stringify(component.layers));
-                        return clonedLayers.map((l: Layer) => ({
-                          ...l,
-                          id: crypto.randomUUID(),
-                          children: l.children ? regenerateChildIds(l.children) : undefined,
-                        }));
-                      }
-                      if (currentLayer.children) {
-                        return { ...currentLayer, children: replaceLayerWithComponentLayers(currentLayer.children) };
-                      }
-                      return currentLayer;
-                    });
-                  };
-
-                  const regenerateChildIds = (children: Layer[]): Layer[] => {
-                    return children.map(child => ({
-                      ...child,
-                      id: crypto.randomUUID(),
-                      children: child.children ? regenerateChildIds(child.children) : undefined,
-                    }));
-                  };
-
-                  const newLayers = replaceLayerWithComponentLayers(detachDraft.layers);
-                  setDraftLayers(currentPageId, newLayers);
-                  setSelectedLayerId(null);
-                }
+              const detachDraft = usePagesStore.getState().draftsByPageId[currentPageId];
+              if (detachDraft) {
+                const newLayers = detachSpecificLayerFromComponent(
+                  detachDraft.layers,
+                  selectedLayerId,
+                  component || undefined
+                );
+                setDraftLayers(currentPageId, newLayers);
+                setSelectedLayerId(null);
               }
             }
           }
@@ -1864,6 +2050,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     copyLayerFromStore,
     copyToClipboard,
     cutToClipboard,
+    copyLayersToClipboard,
+    cutLayersToClipboard,
     clipboardLayer,
     pasteAfter,
     pasteInside,

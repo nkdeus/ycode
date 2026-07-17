@@ -5,8 +5,9 @@
  * Supports draft/published workflow with composite primary key (id, is_published)
  */
 
-import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
 import { fetchAllRows } from '@/lib/supabase-constants';
+import { getKnexClient } from '@/lib/knex-client';
 import type { Translation, CreateTranslationData, UpdateTranslationData } from '@/types';
 
 type TranslationDiffRow = Pick<
@@ -15,15 +16,47 @@ type TranslationDiffRow = Pick<
 >;
 
 /**
+ * Fetch every translation row (including soft-deleted) for one publish state in
+ * a single direct-DB (Knex) query. Replaces paginated PostgREST reads that
+ * issued ~one round-trip per 1000 rows when diffing large catalogues during
+ * publish. Falls back to paginated PostgREST on error.
+ *
+ * @param columns - SELECT list; pass a narrow set for diff/count callers.
+ */
+export async function getAllTranslationRows<T = Translation>(
+  isPublished: boolean,
+  columns: string[] = ['*'],
+  tenantId?: string,
+): Promise<T[]> {
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('translations').select(columns).where('is_published', isPublished);
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    return await query as T[];
+  } catch {
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) return [];
+    const select = columns.includes('*') ? '*' : columns.join(', ');
+    return await fetchAllRows<T>((from, to) =>
+      client.from('translations').select(select).eq('is_published', isPublished).order('id', { ascending: true }).range(from, to) as unknown as PromiseLike<{ data: T[] | null; error: unknown }>,
+    );
+  }
+}
+
+/**
  * Get all translations for a locale (draft by default). Pages through the
  * 1000-row PostgREST default so projects with large catalogues don't get
  * silently truncated.
  */
 export async function getTranslationsByLocale(
   localeId: string,
-  isPublished: boolean = false
+  isPublished: boolean = false,
+  tenantId?: string
 ): Promise<Translation[]> {
-  const client = await getSupabaseAdmin();
+  const client = await getSupabaseAdmin(tenantId);
 
   if (!client) {
     throw new Error('Supabase not configured');
@@ -46,6 +79,170 @@ export async function getTranslationsByLocale(
       throw new Error(`Failed to fetch translations: ${error.message}`);
     }
 
+    if (!data || data.length === 0) break;
+    results.push(...(data as Translation[]));
+    if (data.length < PAGE_SIZE) break;
+  }
+
+  return results;
+}
+
+/**
+ * Content keys that influence URL generation (page/folder/CMS slugs). Kept in
+ * the per-locale "scaffold" so routing, hreflang and locale-switcher URLs work
+ * without loading the full (CMS-content-heavy) translation catalogue.
+ */
+const SLUG_CONTENT_KEYS = ['slug', 'field:key:slug'];
+
+/** Source types whose translations are small and always needed per render. */
+const NON_CMS_SOURCE_TYPES = ['page', 'folder', 'component'];
+
+/** Supabase caps `.in()` lists; chunk large id arrays to stay under it. */
+const IN_CHUNK_SIZE = 300;
+
+function chunkIds(ids: string[], size: number): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < ids.length; i += size) out.push(ids.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Load the per-locale translation "scaffold": every non-CMS translation
+ * (page / folder / component) plus only the CMS *slug* rows.
+ *
+ * This is everything needed for routing, page/component rendering, SEO and
+ * URL generation — but excludes the bulk CMS *content* translations (text /
+ * rich text), which dominate large catalogues and are loaded on demand per
+ * rendered item via {@link getCmsTranslationsForItems}.
+ */
+export async function getLocaleScaffoldTranslations(
+  localeId: string,
+  isPublished: boolean,
+  tenantId?: string,
+): Promise<Translation[]> {
+  const client = await getSupabaseAdmin(tenantId);
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const PAGE_SIZE = 1000;
+  const results: Translation[] = [];
+
+  const pageThrough = async (
+    build: (from: number, to: number) => PromiseLike<{ data: Translation[] | null; error: { message: string } | null }>,
+  ) => {
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await build(from, from + PAGE_SIZE - 1);
+      if (error) throw new Error(`Failed to fetch translations: ${error.message}`);
+      if (!data || data.length === 0) break;
+      results.push(...(data as Translation[]));
+      if (data.length < PAGE_SIZE) break;
+    }
+  };
+
+  // Non-CMS rows (page / folder / component).
+  await pageThrough((from, to) =>
+    client
+      .from('translations')
+      .select('*')
+      .eq('locale_id', localeId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .in('source_type', NON_CMS_SOURCE_TYPES)
+      .order('created_at', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: Translation[] | null; error: { message: string } | null }>,
+  );
+
+  // CMS slug rows (needed to match/build localized dynamic-page URLs).
+  await pageThrough((from, to) =>
+    client
+      .from('translations')
+      .select('*')
+      .eq('locale_id', localeId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .eq('source_type', 'cms')
+      .in('content_key', SLUG_CONTENT_KEYS)
+      .order('created_at', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: Translation[] | null; error: { message: string } | null }>,
+  );
+
+  return results;
+}
+
+/**
+ * Load CMS *content* translations for a specific set of collection items in a
+ * locale. Used to augment the scaffold on demand for exactly the items a given
+ * render path materialises, instead of loading the whole locale catalogue.
+ */
+export async function getCmsTranslationsForItems(
+  localeId: string,
+  isPublished: boolean,
+  itemIds: string[],
+  tenantId?: string,
+): Promise<Translation[]> {
+  if (itemIds.length === 0) return [];
+
+  const client = await getSupabaseAdmin(tenantId);
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const results: Translation[] = [];
+
+  for (const chunk of chunkIds(itemIds, IN_CHUNK_SIZE)) {
+    const { data, error } = await client
+      .from('translations')
+      .select('*')
+      .eq('locale_id', localeId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .eq('source_type', 'cms')
+      .in('source_id', chunk);
+
+    if (error) {
+      throw new Error(`Failed to fetch CMS translations: ${error.message}`);
+    }
+    if (data) results.push(...(data as Translation[]));
+  }
+
+  return results;
+}
+
+/**
+ * Load only slug translations (page / folder / CMS) for a locale. Used by URL
+ * builders (hreflang, sitemap, locale switcher) that never read CMS content —
+ * avoids pulling the full catalogue just to construct localized URLs.
+ */
+export async function getSlugTranslationsByLocale(
+  localeId: string,
+  isPublished: boolean,
+  tenantId?: string,
+): Promise<Translation[]> {
+  const client = await getSupabaseAdmin(tenantId);
+
+  if (!client) {
+    throw new Error('Supabase not configured');
+  }
+
+  const PAGE_SIZE = 1000;
+  const results: Translation[] = [];
+
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await client
+      .from('translations')
+      .select('*')
+      .eq('locale_id', localeId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .in('content_key', SLUG_CONTENT_KEYS)
+      .order('created_at', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (error) {
+      throw new Error(`Failed to fetch slug translations: ${error.message}`);
+    }
     if (!data || data.length === 0) break;
     results.push(...(data as Translation[]));
     if (data.length < PAGE_SIZE) break;
@@ -353,6 +550,9 @@ export async function upsertTranslations(
     content_key: t.content_key,
     content_type: t.content_type,
     content_value: t.content_value,
+    // Without this, the DB default (false) keeps batch translations hidden on
+    // the live site, which only renders completed translations.
+    is_completed: t.is_completed ?? false,
     is_published: false,
     deleted_at: null, // Restore if previously deleted
   }));
@@ -379,25 +579,11 @@ export async function upsertTranslations(
  * 1000-row PostgREST default silently truncating the count.
  */
 export async function getUnpublishedTranslationsCount(): Promise<number> {
-  const client = await getSupabaseAdmin();
+  const cols = ['id', 'content_value', 'is_completed', 'deleted_at'];
 
-  if (!client) {
-    return 0;
-  }
-
-  const cols = 'id, content_value, is_completed, deleted_at';
-
-  // Order by id so .range() pagination is deterministic — without an ORDER BY
-  // PostgREST returns rows in arbitrary order between pages, which causes
-  // duplicates and gaps when paging tens of thousands of translations, leading
-  // to spurious "missing in published map" hits and inflated change counts.
   const [draftRows, publishedRows] = await Promise.all([
-    fetchAllRows<TranslationDiffRow>((from, to) =>
-      client.from('translations').select(cols).eq('is_published', false).order('id', { ascending: true }).range(from, to)
-    ),
-    fetchAllRows<TranslationDiffRow>((from, to) =>
-      client.from('translations').select(cols).eq('is_published', true).order('id', { ascending: true }).range(from, to)
-    ),
+    getAllTranslationRows<TranslationDiffRow>(false, cols),
+    getAllTranslationRows<TranslationDiffRow>(true, cols),
   ]);
 
   if (draftRows.length === 0) {

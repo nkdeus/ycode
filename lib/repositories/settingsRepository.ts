@@ -7,6 +7,16 @@
 import { getSupabaseAdmin } from '@/lib/supabase-server';
 import type { Setting } from '@/types';
 
+// Postgres "undefined_table" — the settings table is briefly absent right after
+// a DB reset and before migrations re-run. Treat it as "no settings" instead of
+// crashing page renders.
+const UNDEFINED_TABLE = '42P01';
+
+/** True when an error indicates the settings table does not exist yet. */
+function isMissingTableError(error: { code?: string } | null): boolean {
+  return error?.code === UNDEFINED_TABLE;
+}
+
 /**
  * Get all settings
  *
@@ -24,6 +34,9 @@ export async function getAllSettings(): Promise<Setting[]> {
     .order('key', { ascending: true });
 
   if (error) {
+    if (isMissingTableError(error)) {
+      return [];
+    }
     throw new Error(`Failed to fetch settings: ${error.message}`);
   }
 
@@ -34,10 +47,11 @@ export async function getAllSettings(): Promise<Setting[]> {
  * Get a setting by key
  *
  * @param key - The setting key
+ * @param tenantId - Optional tenant scope (ignored in single-tenant deployments)
  * @returns Promise resolving to the setting value or null if not found
  */
-export async function getSettingByKey(key: string): Promise<any | null> {
-  const client = await getSupabaseAdmin();
+export async function getSettingByKey(key: string, tenantId?: string): Promise<any | null> {
+  const client = await getSupabaseAdmin(tenantId);
   if (!client) {
     throw new Error('Failed to initialize Supabase client');
   }
@@ -49,8 +63,8 @@ export async function getSettingByKey(key: string): Promise<any | null> {
     .single();
 
   if (error) {
-    if (error.code === 'PGRST116') {
-      // Not found
+    if (error.code === 'PGRST116' || isMissingTableError(error)) {
+      // Not found, or table not yet created
       return null;
     }
     throw new Error(`Failed to fetch setting: ${error.message}`);
@@ -81,6 +95,9 @@ export async function getSettingsByKeys(keys: string[]): Promise<Record<string, 
     .in('key', keys);
 
   if (error) {
+    if (isMissingTableError(error)) {
+      return {};
+    }
     throw new Error(`Failed to fetch settings: ${error.message}`);
   }
 

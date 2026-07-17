@@ -9,6 +9,7 @@ import type { VersionEntityType, CreateVersionData, Layer, VersionMetadata } fro
 import { createPatch, createInversePatch, isPatchEmpty, doesPatchChangeState, generatePatchDescription, JsonPatch } from '@/lib/version-utils';
 import { generatePageLayersHash, generateComponentContentHash, generateLayerStyleContentHash } from '@/lib/hash-utils';
 import { stripUIProperties } from '@/lib/layer-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
 import { useEditorStore } from '@/stores/useEditorStore';
 
 // In-memory cache for previous states (per session).
@@ -21,6 +22,15 @@ const previousStatesCache = new Map<string, string>();
  */
 function getCacheKey(entityType: VersionEntityType, entityId: string): string {
   return `${entityType}:${entityId}`;
+}
+
+/**
+ * Build the version-tracking entity id for a component variant. Each variant
+ * keeps its own undo/redo history, keyed by `${componentId}:${variantId}`, so
+ * edits to a non-primary variant are tracked independently.
+ */
+export function componentVersionEntityId(componentId: string, variantId?: string | null): string {
+  return variantId ? `${componentId}:${variantId}` : componentId;
 }
 
 /** Get the cached previous state, parsing the stored JSON. */
@@ -497,8 +507,8 @@ function extractLayerStyleIds(layers: Layer[]): string[] {
 
   function traverse(layerList: Layer[]) {
     for (const layer of layerList) {
-      if (layer.styleId) {
-        styleIds.add(layer.styleId);
+      for (const id of getStyleIds(layer)) {
+        styleIds.add(id);
       }
       if (layer.children && layer.children.length > 0) {
         traverse(layer.children);

@@ -15,7 +15,7 @@ import type { SplitText as SplitTextClass } from 'gsap/SplitText';
 
 import { ITEMS_INJECTED_EVENT, type ItemsInjectedDetail } from '@/components/FilterableCollection';
 import { buildGsapProps, addTweenToTimeline, createSplitTextAnimation, generateInitialAnimationCSS, getEffectiveApplyStyle, setColorVariableResolver } from '@/lib/animation-utils';
-import { getCurrentBreakpoint } from '@/lib/breakpoint-utils';
+import { BREAKPOINT_VALUES, getCurrentBreakpoint } from '@/lib/breakpoint-utils';
 import { remapLayerIdsForCollectionItem } from '@/lib/collection-utils';
 import { useColorVariablesStore } from '@/stores/useColorVariablesStore';
 import type { Layer, LayerInteraction, Breakpoint } from '@/types';
@@ -162,6 +162,31 @@ function collectHiddenLayerInfo(interactions: CollectedInteraction[]): Map<strin
   });
 
   return hiddenMap;
+}
+
+/**
+ * Layer IDs whose visibility is toggled by a user interaction (click/hover).
+ * Their live show/hide state must persist across breakpoint changes instead of
+ * reverting to the on-load default when animations reset on resize.
+ */
+function collectInteractiveDisplayTargets(interactions: CollectedInteraction[]): Set<string> {
+  const targets = new Set<string>();
+  interactions.forEach(({ interaction }) => {
+    if (interaction.trigger !== 'click' && interaction.trigger !== 'hover') return;
+    (interaction.tweens || []).forEach((tween) => {
+      if (tween.from?.display || tween.to?.display) targets.add(tween.layer_id);
+    });
+  });
+  return targets;
+}
+
+/**
+ * Whether an on-load hide applies uniformly to every breakpoint (or not at all).
+ * Breakpoint-specific hides carry responsive intent that the per-breakpoint
+ * reset must honor, so a user toggle should not be preserved over them.
+ */
+function isUniformOnLoadHide(breakpoints: string[] | null | undefined): boolean {
+  return breakpoints == null || BREAKPOINT_VALUES.every((bp) => breakpoints.includes(bp));
 }
 
 /**
@@ -368,6 +393,10 @@ function buildTimeline(interaction: LayerInteraction): gsap.core.Timeline | null
 export default function AnimationInitializer({ layers, injectInitialCSS }: AnimationInitializerProps) {
   const cleanupRef = useRef<(() => void)[]>([]);
   const timelinesRef = useRef<Map<string, gsap.core.Timeline>>(new Map());
+  // ScrollTriggers for one-shot `scroll-into-view` intros, keyed by
+  // interaction id. Tracked separately so effect re-runs can detach a played
+  // trigger without killing its in-flight timeline (see detachAnimations).
+  const scrollTriggersRef = useRef<Map<string, ScrollTrigger>>(new Map());
   const prevBreakpointRef = useRef<Breakpoint | null>(null);
   const [currentBreakpoint, setCurrentBreakpoint] = useState<Breakpoint>(() => getCurrentBreakpoint());
   const styleRef = useRef<HTMLStyleElement | null>(null);
@@ -520,18 +549,65 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
 
     // Reset animation states when breakpoint changes
     if (isBreakpointChange) {
+      // Snapshot user-toggled show/hide state (e.g. tab switchers) before the
+      // reset wipes it, so a resize crossing a breakpoint doesn't revert
+      // click/hover toggles back to their on-load default.
+      const interactiveDisplayTargets = collectInteractiveDisplayTargets(collectedInteractions);
+      const toggledDisplayState = new Map<string, string | null>();
+      interactiveDisplayTargets.forEach((layerId) => {
+        // Skip breakpoint-specific on-load hides so responsive intent still resets.
+        if (!isUniformOnLoadHide(hiddenLayerInfo.get(layerId))) return;
+        const el = getElement(layerId);
+        if (el) toggledDisplayState.set(layerId, el.getAttribute('data-gsap-hidden'));
+      });
+
       resetAnimationStates(collectedInteractions, hiddenLayerInfo, currentBreakpoint);
+
+      // Restore the captured visibility so the user's current selection survives.
+      toggledDisplayState.forEach((value, layerId) => {
+        const el = getElement(layerId);
+        if (!el) return;
+        if (value === null) {
+          el.removeAttribute('data-gsap-hidden');
+        } else {
+          el.setAttribute('data-gsap-hidden', value);
+        }
+      });
+
       playedOneShotInteractionsRef.current = new Set();
     }
 
     // Update previous breakpoint reference
     prevBreakpointRef.current = currentBreakpoint;
 
-    // Clean up previous animations
+    // Detach animations from the previous run. One-shot intros (load,
+    // scroll-into-view) that have already played keep their timeline so
+    // effect re-runs (filter/load-more state changes, Suspense resolution)
+    // don't freeze a mid-flight animation. The early break in the
+    // per-trigger switch below avoids rebuilding their timelines/triggers.
+    //
+    // `scrollTrigger.kill()` defaults to also killing its linked timeline,
+    // so a played trigger must be detached with `kill(false, true)` to keep
+    // the animation running. Defined as a closure so the unmount/return
+    // cleanup can reuse it.
+    const detachAnimations = () => {
+      const playedIds = playedOneShotInteractionsRef.current;
+      scrollTriggersRef.current.forEach((st, interactionId) => {
+        // allowAnimation = played → don't kill the in-flight timeline.
+        st.kill(false, playedIds.has(interactionId));
+        scrollTriggersRef.current.delete(interactionId);
+      });
+      timelinesRef.current.forEach((tl, interactionId) => {
+        if (!playedIds.has(interactionId)) {
+          tl.kill();
+          timelinesRef.current.delete(interactionId);
+        }
+      });
+    };
+
     cleanupRef.current.forEach((cleanup) => cleanup());
     cleanupRef.current = [];
-    timelinesRef.current.forEach((tl) => tl.kill());
-    timelinesRef.current.clear();
+    detachAnimations();
 
     collectedInteractions.forEach(({ triggerLayerId, interaction }) => {
       const triggerElement = getElement(triggerLayerId);
@@ -656,7 +732,9 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
             },
           });
 
-          cleanupRef.current.push(() => scrollTrigger.kill());
+          // Tracked in scrollTriggersRef (not cleanupRef) so a played trigger
+          // can be detached on re-run without killing its in-flight timeline.
+          scrollTriggersRef.current.set(interaction.id, scrollTrigger);
           break;
         }
 
@@ -735,13 +813,18 @@ export default function AnimationInitializer({ layers, injectInitialCSS }: Anima
 
     // Capture ref values for cleanup
     const cleanups = cleanupRef.current;
-    const timelines = timelinesRef.current;
 
     return () => {
       if (rebindTimer) clearTimeout(rebindTimer);
       remountObserver.disconnect();
       cleanups.forEach((cleanup) => cleanup());
-      timelines.forEach((tl) => tl.kill());
+      // Detach played one-shots without killing their timeline (see note at
+      // top of effect), then sweep any remaining triggers. Preserved
+      // timelines have already been unlinked via kill(false, true), so the
+      // sweep below can't touch them.
+      detachAnimations();
+      // Optional chaining: ScrollTrigger is lazily imported here and stays null
+      // until a layer needs it.
       ScrollTrigger?.getAll().forEach((st) => st.kill());
     };
   }, [effectiveLayers, currentBreakpoint, pluginsReady, rebindTick]);

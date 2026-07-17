@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { getItemsByCollectionId } from '@/lib/repositories/collectionItemRepository';
 import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueRepository';
 import { getFieldsByCollectionId } from '@/lib/repositories/collectionFieldRepository';
@@ -9,6 +10,7 @@ import { getAllPageFolders } from '@/lib/repositories/pageFolderRepository';
 import { renderCollectionItemsToHtml, loadTranslationsForLocale } from '@/lib/page-fetcher';
 import { noCache } from '@/lib/api-response';
 import { compareDateFilter, isDateFieldType, isDatePreset, parseItemIdList, resolveDateFilterValue } from '@/lib/collection-field-utils';
+import { fetchAllRows } from '@/lib/supabase-constants';
 import type { Layer, CollectionItem, CollectionItemWithValues } from '@/types';
 
 export const dynamic = 'force-dynamic';
@@ -28,11 +30,21 @@ interface FilterCondition {
   // For source === 'self': also include the current dynamic page item's ID
   // in the comparison set at runtime.
   includesCurrentPageItem?: boolean;
+  // 'current_page' binds the compare value to the current dynamic page item:
+  // reference fields inject the page item's ID; scalar fields use the value of
+  // `currentPageFieldId` on the page item.
+  valueMode?: 'static' | 'current_page';
+  currentPageFieldId?: string;
 }
 
 // PostgREST encodes .in() values into a URL query param.
 // Conservative chunk size avoids hitting URL length limits (~8KB).
 const IN_CHUNK_SIZE = 150;
+
+// How many chunk queries to run at once. Chunks are independent, so issuing them
+// concurrently overlaps the round-trips (the dominant cost on large collections)
+// while the cap keeps us from opening an unbounded number of DB connections.
+const CHUNK_CONCURRENCY = 6;
 
 function escapeLikeValue(val: string): string {
   return val.replace(/[%_\\]/g, '\\$&');
@@ -41,6 +53,9 @@ function escapeLikeValue(val: string): string {
 /**
  * Run a query against collection_item_values in chunks to avoid
  * Supabase/PostgREST URL-length limits on .in() clauses.
+ *
+ * Chunks are issued in bounded-concurrency batches: each batch runs in parallel
+ * (overlapping latency) and batches run sequentially (capping connections).
  *
  * @param build  - receives a chunk of item IDs; must return { data, error }
  * @param itemIds - full array of item IDs to query against
@@ -54,10 +69,19 @@ async function chunkedQuery<T>(
     const { data } = await build(itemIds);
     return data || [];
   }
-  const results: T[] = [];
+
+  const chunks: string[][] = [];
   for (let i = 0; i < itemIds.length; i += IN_CHUNK_SIZE) {
-    const { data } = await build(itemIds.slice(i, i + IN_CHUNK_SIZE));
-    if (data) results.push(...data);
+    chunks.push(itemIds.slice(i, i + IN_CHUNK_SIZE));
+  }
+
+  const results: T[] = [];
+  for (let i = 0; i < chunks.length; i += CHUNK_CONCURRENCY) {
+    const batch = chunks.slice(i, i + CHUNK_CONCURRENCY);
+    const settled = await Promise.all(batch.map(chunk => build(chunk)));
+    for (const { data } of settled) {
+      if (data) results.push(...data);
+    }
   }
   return results;
 }
@@ -67,20 +91,24 @@ async function getAllItemIdsForCollection(
   collectionId: string,
   isPublished: boolean,
 ): Promise<string[]> {
-  let query = client
-    .from('collection_items')
-    .select('id')
-    .eq('collection_id', collectionId)
-    .eq('is_published', isPublished)
-    .is('deleted_at', null);
-
-  if (isPublished) {
-    query = query.eq('is_publishable', true);
-  }
-
-  const { data, error } = await query;
-  if (error) throw new Error(`Failed to fetch item IDs: ${error.message}`);
-  return data?.map(d => d.id) || [];
+  // Page past Supabase/PostgREST's 1000-row default cap; otherwise collections
+  // with >1000 items silently lose their tail from the candidate pool, so valid
+  // items vanish from filtered/load-more results. Match SSR and load-more
+  // ordering so tie-breaks and any `maxTotal` slice select the same items.
+  const rows = await fetchAllRows<{ id: string }>((from, to) => {
+    let q = client
+      .from('collection_items')
+      .select('id')
+      .eq('collection_id', collectionId)
+      .eq('is_published', isPublished)
+      .is('deleted_at', null)
+      .order('manual_order', { ascending: true })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (isPublished) q = q.eq('is_publishable', true);
+    return q;
+  });
+  return rows.map(r => r.id);
 }
 
 async function getIdsMatchingFilter(
@@ -88,9 +116,11 @@ async function getIdsMatchingFilter(
   filter: FilterCondition,
   isPublished: boolean,
   allItemIds: string[],
+  timezone: string,
 ): Promise<Set<string>> {
   const { fieldId, operator, value } = filter;
   const allSet = new Set(allItemIds);
+  const isDateOnly = filter.fieldType === 'date_only';
 
   const selectIds = (chunk: string[]) =>
     client
@@ -138,7 +168,7 @@ async function getIdsMatchingFilter(
         );
         const result = new Set<string>();
         for (const row of data) {
-          if (compareDateFilter(String(row.value), 'is', value)) result.add(row.item_id);
+          if (compareDateFilter(String(row.value), 'is', value, undefined, timezone, isDateOnly)) result.add(row.item_id);
         }
         return result;
       }
@@ -191,7 +221,7 @@ async function getIdsMatchingFilter(
         );
         const matchIds = new Set<string>();
         for (const row of data) {
-          if (compareDateFilter(String(row.value), 'is', value)) matchIds.add(row.item_id);
+          if (compareDateFilter(String(row.value), 'is', value, undefined, timezone, isDateOnly)) matchIds.add(row.item_id);
         }
         return new Set([...allSet].filter(id => !matchIds.has(id)));
       }
@@ -262,7 +292,7 @@ async function getIdsMatchingFilter(
       );
       const result = new Set<string>();
       for (const row of data) {
-        if (compareDateFilter(String(row.value), 'is_before', value)) result.add(row.item_id);
+        if (compareDateFilter(String(row.value), 'is_before', value, undefined, timezone, isDateOnly)) result.add(row.item_id);
       }
       return result;
     }
@@ -273,7 +303,7 @@ async function getIdsMatchingFilter(
       );
       const result = new Set<string>();
       for (const row of data) {
-        if (compareDateFilter(String(row.value), 'is_after', value)) result.add(row.item_id);
+        if (compareDateFilter(String(row.value), 'is_after', value, undefined, timezone, isDateOnly)) result.add(row.item_id);
       }
       return result;
     }
@@ -291,11 +321,11 @@ async function getIdsMatchingFilter(
         const storedValue = String(row.value);
         // Open-ended ranges fall back to the relevant single-bound operator.
         if (startRaw && endRaw) {
-          if (compareDateFilter(storedValue, 'is_between', startRaw, endRaw)) result.add(row.item_id);
+          if (compareDateFilter(storedValue, 'is_between', startRaw, endRaw, timezone, isDateOnly)) result.add(row.item_id);
         } else if (startRaw) {
-          if (!compareDateFilter(storedValue, 'is_before', startRaw)) result.add(row.item_id);
+          if (!compareDateFilter(storedValue, 'is_before', startRaw, undefined, timezone, isDateOnly)) result.add(row.item_id);
         } else if (endRaw) {
-          if (!compareDateFilter(storedValue, 'is_after', endRaw)) result.add(row.item_id);
+          if (!compareDateFilter(storedValue, 'is_after', endRaw, undefined, timezone, isDateOnly)) result.add(row.item_id);
         }
       }
       return result;
@@ -439,10 +469,43 @@ function getSelfFilterMatches(
   return new Set(candidateIds.filter(id => compareSet.has(id)));
 }
 
+/**
+ * Resolve a `valueMode: 'current_page'` filter into a concrete static filter by
+ * binding its compare value to the current dynamic page item:
+ *   - reference fields inject the page item's ID into the compared ID set
+ *   - scalar fields read the page item's `currentPageFieldId` value
+ * Mirrors the SSR resolution in `evaluateCondition`.
+ */
+async function resolveCurrentPageFilter(
+  filter: FilterCondition,
+  isPublished: boolean,
+  pageCollectionItemId?: string,
+): Promise<FilterCondition> {
+  const isReferenceField = filter.fieldType === 'reference'
+    || filter.fieldType === 'multi_reference'
+    || ['is_one_of', 'is_not_one_of', 'contains_all_of', 'contains_exactly'].includes(filter.operator);
+  if (isReferenceField) {
+    const ids = parseItemIdList(filter.value);
+    if (pageCollectionItemId && !ids.includes(pageCollectionItemId)) {
+      ids.push(pageCollectionItemId);
+    }
+    // 'contains exactly' against a single injected page-item id can never match a real
+    // multi-reference set — the "Current X" intent is "contains the current item".
+    const operator = filter.operator === 'contains_exactly' ? 'contains_all_of' : filter.operator;
+    return { ...filter, operator, value: JSON.stringify(ids) };
+  }
+  if (filter.currentPageFieldId && pageCollectionItemId) {
+    const valueMap = await getFieldValuesForItems(filter.currentPageFieldId, isPublished, [pageCollectionItemId]);
+    return { ...filter, value: valueMap.get(pageCollectionItemId) ?? '' };
+  }
+  return { ...filter, value: '' };
+}
+
 async function getFilteredItemIds(
   collectionId: string,
   isPublished: boolean,
   filterGroups: FilterCondition[][],
+  timezone: string,
   pageCollectionItemId?: string,
 ): Promise<{ matchingIds: string[]; total: number }> {
   const client = await getSupabaseAdmin();
@@ -467,13 +530,16 @@ async function getFilteredItemIds(
         currentIds = new Set([...currentIds].filter(id => matchingForFilter.has(id)));
         continue;
       }
+      if (filter.valueMode === 'current_page') {
+        filter = await resolveCurrentPageFilter(filter, isPublished, pageCollectionItemId);
+      }
       if (isDateFieldType(filter.fieldType) && isDatePreset(filter.value)) {
-        const resolved = resolveDateFilterValue(filter.operator, filter.value, filter.value2);
+        const resolved = resolveDateFilterValue(filter.operator, filter.value, filter.value2, timezone);
         if (resolved) {
           filter = { ...filter, operator: resolved.operator, value: resolved.value, value2: resolved.value2 };
         }
       }
-      const matchingForFilter = await getIdsMatchingFilter(client, filter, isPublished, [...currentIds]);
+      const matchingForFilter = await getIdsMatchingFilter(client, filter, isPublished, [...currentIds], timezone);
       currentIds = new Set([...currentIds].filter(id => matchingForFilter.has(id)));
     }
 
@@ -558,6 +624,8 @@ export async function POST(
       sortOrder = 'asc',
       limit,
       offset = 0,
+      maxTotal,
+      baseOffset = 0,
       localeCode,
       collectionLayerClasses,
       collectionLayerTag,
@@ -574,21 +642,58 @@ export async function POST(
       return noCache({ error: 'collectionLayerId is required' }, 400);
     }
 
+    // Collection fields, page/folder maps, and translations are needed only for
+    // rendering and don't depend on the timezone or which items match. Fetch them
+    // concurrently with the timezone lookup and the (slower) filter resolution so
+    // they're off the critical path.
+    const metadataPromise = Promise.all([
+      getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true }),
+      getAllPages(),
+      getAllPageFolders(),
+      localeCode ? loadTranslationsForLocale(localeCode, isPublished) : Promise.resolve(null),
+    ]);
+    // Register a no-op rejection handler so bailing out early (empty result) or
+    // an error in filtering doesn't surface as an unhandled promise rejection.
+    metadataPromise.catch(() => {});
+
+    const timezone = (await getSettingByKey('timezone') as string | null) || 'UTC';
+
     const { matchingIds, total: filteredTotal } = await getFilteredItemIds(
       collectionId,
       isPublished,
       filterGroups,
+      timezone,
       pageCollectionItemId,
     );
 
-    if (matchingIds.length === 0) {
+    const pageOffset = Math.max(0, offset || 0);
+    // Leading records the collection's `offset` skips before pagination. The
+    // client's `offset` is relative to the post-offset window, so the real
+    // offset into the (capped) matching set is the sum. Applied after the
+    // `maxTotal` cap to mirror SSR (cap the pool, then skip the first N).
+    const baseOffsetNum = Math.max(0, isNaN(Number(baseOffset)) ? 0 : Number(baseOffset));
+
+    // `maxTotal` (the collection's display limit when pagination is enabled)
+    // caps the total just like SSR, so a client-side reconcile reports the same
+    // "Showing X of Y" and stops load_more/paging at the same boundary instead
+    // of exposing the raw filtered count.
+    const cappedTotal = typeof maxTotal === 'number' && maxTotal > 0
+      ? Math.min(filteredTotal, maxTotal)
+      : filteredTotal;
+    // The offset skips leading records, so the paginated total excludes them.
+    const displayTotal = Math.max(0, cappedTotal - baseOffsetNum);
+    const effectiveOffset = baseOffsetNum + pageOffset;
+
+    if (matchingIds.length === 0 || pageOffset >= displayTotal) {
       return noCache({
-        data: { html: '', total: 0, count: 0, offset, hasMore: false, itemIds: [] },
+        data: { html: '', total: displayTotal, count: 0, offset: pageOffset, hasMore: false, itemIds: [] },
       });
     }
 
-    const pageOffset = Math.max(0, offset || 0);
-    const pageLimit = limit && limit > 0 ? limit : filteredTotal;
+    // Never serve items past the cap: shrink the page window to what's left
+    // below `displayTotal`.
+    const requestedLimit = limit && limit > 0 ? limit : displayTotal;
+    const pageLimit = Math.min(requestedLimit, displayTotal - pageOffset);
     let pageRawItems: CollectionItem[] = [];
     let pageItemIds: string[] = [];
 
@@ -597,13 +702,13 @@ export async function POST(
       const { items } = await getItemsByCollectionId(collectionId, isPublished, {
         itemIds: matchingIds,
         limit: pageLimit,
-        offset: pageOffset,
+        offset: effectiveOffset,
       });
       pageRawItems = items;
       pageItemIds = items.map(item => item.id);
     } else if (sortBy === 'random') {
       const randomizedIds = [...matchingIds].sort(() => Math.random() - 0.5);
-      pageItemIds = randomizedIds.slice(pageOffset, pageOffset + pageLimit);
+      pageItemIds = randomizedIds.slice(effectiveOffset, effectiveOffset + pageLimit);
       if (pageItemIds.length > 0) {
         const { items } = await getItemsByCollectionId(collectionId, isPublished, {
           itemIds: pageItemIds,
@@ -626,7 +731,7 @@ export async function POST(
           ? bStr.localeCompare(aStr)
           : aStr.localeCompare(bStr);
       });
-      pageItemIds = sortedIds.slice(pageOffset, pageOffset + pageLimit);
+      pageItemIds = sortedIds.slice(effectiveOffset, effectiveOffset + pageLimit);
       if (pageItemIds.length > 0) {
         const { items } = await getItemsByCollectionId(collectionId, isPublished, {
           itemIds: pageItemIds,
@@ -648,9 +753,10 @@ export async function POST(
     // render the live number in the filtered HTML.
     await enrichItemsWithCountValues(paginatedItems, collectionId, isPublished);
 
-    const hasMore = pageOffset + paginatedItems.length < filteredTotal;
+    const hasMore = pageOffset + paginatedItems.length < displayTotal;
 
-    const collectionFields = await getFieldsByCollectionId(collectionId, isPublished, { excludeComputed: true });
+    const [collectionFields, pages, folders, localeData] = await metadataPromise;
+
     const slugField = collectionFields.find(f => f.key === 'slug');
     const collectionItemSlugs: Record<string, string> = {};
     if (slugField) {
@@ -661,18 +767,8 @@ export async function POST(
       }
     }
 
-    const [pages, folders] = await Promise.all([
-      getAllPages(),
-      getAllPageFolders(),
-    ]);
-
-    let locale = null;
-    let translations: Record<string, any> | undefined;
-    if (localeCode) {
-      const localeData = await loadTranslationsForLocale(localeCode, isPublished);
-      locale = localeData.locale;
-      translations = localeData.translations;
-    }
+    const locale = localeData?.locale ?? null;
+    const translations = localeData?.translations;
 
     const html = await renderCollectionItemsToHtml(
       paginatedItems,
@@ -701,7 +797,7 @@ export async function POST(
     return noCache({
       data: {
         html,
-        total: filteredTotal,
+        total: displayTotal,
         count: paginatedItems.length,
         offset: pageOffset,
         hasMore,

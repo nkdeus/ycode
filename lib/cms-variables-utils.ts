@@ -7,9 +7,10 @@
 
 import type { CollectionField, InlineVariable } from '@/types';
 import { isDateFieldType } from '@/lib/collection-field-utils';
-import { formatDateInTimezone } from '@/lib/date-format-utils';
+import { formatDateInTimezone, formatDateOnly } from '@/lib/date-format-utils';
 import { extractPlainTextFromTiptap } from '@/lib/tiptap-utils';
 import { formatDateWithPreset, formatNumberWithPreset } from '@/lib/variable-format-utils';
+import { PAGINATION_VARIABLE_LABELS } from '@/lib/pagination-text-utils';
 
 /**
  * Format a field value for display based on field type
@@ -48,6 +49,11 @@ export function formatFieldValue(
     if (format) {
       return formatDateWithPreset(value, format, timezone);
     }
+    // date_only values are timezone-neutral calendar dates: format without
+    // timezone conversion so the day never shifts.
+    if (fieldType === 'date_only') {
+      return formatDateOnly(value);
+    }
     return formatDateInTimezone(value, timezone, 'display');
   }
 
@@ -78,14 +84,36 @@ export function formatFieldValue(
  * @param collectionLayerId - Optional specific collection layer ID (for layer-specific resolution)
  * @param layerDataMap - Optional map of layer ID → item data (for layer-specific resolution)
  */
+/**
+ * Builds the lookup key for a field variable, joining the root field id with its
+ * relationship chain (e.g. "authorRefId.photoFieldId" for nested references).
+ * Matches the enhanced-value keys produced by resolveReferenceFieldsSync.
+ */
+export function buildFieldVariablePath(
+  fieldId: string,
+  relationships?: string[] | null
+): string {
+  return relationships && relationships.length > 0
+    ? [fieldId, ...relationships].join('.')
+    : fieldId;
+}
+
 export function resolveFieldFromSources(
   fieldId: string,
   source: string | undefined,
   collectionItemData?: Record<string, string>,
   pageCollectionItemData?: Record<string, string> | null,
   collectionLayerId?: string,
-  layerDataMap?: Record<string, Record<string, string>>
+  layerDataMap?: Record<string, Record<string, string>>,
+  globalsData?: Record<string, string>
 ): string | undefined {
+  // Global source - site-wide variable, independent of collection/page context.
+  // Renderers merge globals into collectionItemData, so fall back to it when an
+  // explicit globalsData map isn't threaded.
+  if (source === 'global') {
+    return globalsData?.[fieldId] ?? collectionItemData?.[fieldId] ?? pageCollectionItemData?.[fieldId] ?? undefined;
+  }
+
   // Page source - use page data only
   if (source === 'page') {
     return pageCollectionItemData?.[fieldId];
@@ -148,6 +176,9 @@ export function getVariableLabel(
     }
 
     return rootField?.name || '[Deleted Field]';
+  }
+  if (variable.type === 'pagination' && variable.data?.key) {
+    return PAGINATION_VARIABLE_LABELS[variable.data.key] || 'Pagination';
   }
   return variable.type;
 }

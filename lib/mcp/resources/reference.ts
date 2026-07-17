@@ -69,6 +69,7 @@ const ELEMENTS_REFERENCE_JSON = JSON.stringify({
     section_cannot_contain_section: true,
     links_cannot_nest: true,
     component_instances_are_readonly: true,
+    component_instances_note: 'A page layer with a componentId is a component instance. Its inner layers are read-only in place. To edit a component\'s structure/design, target the master with get_component + update_component_layers; per-instance content uses variables/overrides.',
   },
   element_types: {
     structure: {
@@ -127,6 +128,7 @@ const DESIGN_REFERENCE_JSON = JSON.stringify({
       flexDirection: { type: 'enum', values: ['row', 'column', 'row-reverse', 'column-reverse'] },
       justifyContent: { type: 'enum', values: ['start', 'end', 'center', 'between', 'around', 'evenly'] },
       alignItems: { type: 'enum', values: ['start', 'end', 'center', 'baseline', 'stretch'] },
+      alignSelf: { type: 'enum', values: ['auto', 'start', 'end', 'center', 'baseline', 'stretch'] },
       gap: { type: 'css_value', examples: ['16px', '1rem'] },
       gridTemplateColumns: { type: 'string', examples: ['4', '1fr 1fr 1fr', 'repeat(3, 1fr)'], description: 'A bare integer is accepted and normalized to repeat(N, 1fr).' },
     },

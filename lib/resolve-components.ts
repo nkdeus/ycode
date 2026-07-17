@@ -182,6 +182,26 @@ function remapVariableCollectionLayerIds(vars: LayerVariables, idMap: Map<string
     if (designChanged) { result.design = newDesign; changed = true; }
   }
 
+  // Conditional visibility conditions targeting a collection by layer ID
+  // (e.g. empty-state "has no items" rules inside a component instance)
+  if (vars.conditionalVisibility?.groups?.length) {
+    const groups = vars.conditionalVisibility.groups;
+    const newGroups = groups.map((group) => {
+      if (!Array.isArray(group?.conditions)) return group;
+      const newConditions = group.conditions.map((cond) => {
+        const mapped = cond?.collectionLayerId ? idMap.get(cond.collectionLayerId) : undefined;
+        return mapped && mapped !== cond.collectionLayerId ? { ...cond, collectionLayerId: mapped } : cond;
+      });
+      return newConditions.some((c, i) => c !== group.conditions[i])
+        ? { ...group, conditions: newConditions }
+        : group;
+    });
+    if (newGroups.some((g, i) => g !== groups[i])) {
+      result.conditionalVisibility = { ...vars.conditionalVisibility, groups: newGroups };
+      changed = true;
+    }
+  }
+
   return changed ? result : vars;
 }
 
@@ -190,11 +210,23 @@ function remapVariableCollectionLayerIds(vars: LayerVariables, idMap: Map<string
  * This enables animations to target the correct elements when multiple instances exist.
  * @param layers - Layers to transform
  * @param instanceLayerId - The component instance's layer ID used as namespace
+ * @param rootMasterId - The component root's master ID, mapped to the instance ID so
+ *   child interactions targeting the root (which renders as the instance) resolve correctly
  * @returns Transformed layers with remapped IDs and interaction references
  */
-export function transformLayerIdsForInstance(layers: Layer[], instanceLayerId: string): Layer[] {
+export function transformLayerIdsForInstance(
+  layers: Layer[],
+  instanceLayerId: string,
+  rootMasterId?: string,
+): Layer[] {
   // Build ID map: original ID -> instance-specific ID
   const idMap = new Map<string, string>();
+
+  // The component root renders with the instance ID, so map its master ID
+  // to the instance ID for child tweens/interactions that target the root.
+  if (rootMasterId && rootMasterId !== instanceLayerId) {
+    idMap.set(rootMasterId, instanceLayerId);
+  }
 
   // First pass: collect all layer IDs and generate new ones
   const collectIds = (layerList: Layer[]) => {
@@ -410,27 +442,34 @@ export function applyComponentOverrides(
     // Check if this layer has a link variable linked
     const linkedLinkVariableId = (layer.variables?.link as any)?.variable_id;
     if (linkedLinkVariableId) {
-      // Check for override first, then fall back to variable's default value.
-      // Use `!== undefined` (not `??`) so an explicit `null` override (user cleared
-      // the link via "No link") is respected instead of reverting to the default.
       const overrideValue = overrides?.link?.[linkedLinkVariableId];
       const variableDef = componentVariables?.find(v => v.id === linkedLinkVariableId);
-      const linkValue = (overrideValue !== undefined ? overrideValue : variableDef?.default_value) as any;
 
-      if (linkValue) {
-        // Apply the value to this layer's link variable, keeping the variable_id for reference
-        updatedLayer = {
-          ...updatedLayer,
-          variables: {
-            ...updatedLayer.variables,
-            link: { ...linkValue, variable_id: linkedLinkVariableId },
-          },
-        };
-      } else {
-        // Explicit "No link" — strip any inherited link settings from the layer
-        // so the rendered element has no href / link wrapper.
-        const { link: _ignored, ...restVariables } = updatedLayer.variables ?? {};
-        updatedLayer = { ...updatedLayer, variables: restVariables };
+      // Only resolve when the link variable belongs to THIS component's scope
+      // (an override exists here or a matching variable is defined). A link that
+      // was already resolved for a nested component instance keeps its
+      // `variable_id` for reference — skipping out-of-scope ids stops an outer
+      // component pass from stripping a valid nested link it doesn't own.
+      if (overrideValue !== undefined || variableDef) {
+        // Use `!== undefined` (not `??`) so an explicit `null` override (user cleared
+        // the link via "No link") is respected instead of reverting to the default.
+        const linkValue = (overrideValue !== undefined ? overrideValue : variableDef?.default_value) as any;
+
+        if (linkValue) {
+          // Apply the value to this layer's link variable, keeping the variable_id for reference
+          updatedLayer = {
+            ...updatedLayer,
+            variables: {
+              ...updatedLayer.variables,
+              link: { ...linkValue, variable_id: linkedLinkVariableId },
+            },
+          };
+        } else {
+          // Explicit "No link" — strip any inherited link settings from the layer
+          // so the rendered element has no href / link wrapper.
+          const { link: _ignored, ...restVariables } = updatedLayer.variables ?? {};
+          updatedLayer = { ...updatedLayer, variables: restVariables };
+        }
       }
     }
 
@@ -629,7 +668,7 @@ export function resolveComponents(
         // Transform layer IDs to be instance-specific
         // This ensures each component instance has unique IDs for proper animation targeting
         const resolvedChildren = taggedChildren.length
-          ? transformLayerIdsForInstance(taggedChildren, layer.id)
+          ? transformLayerIdsForInstance(taggedChildren, layer.id, componentContent.id)
           : [];
 
         // Remap root layer interactions to reference transformed child IDs

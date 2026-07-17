@@ -18,6 +18,8 @@ export interface IconProps extends React.SVGProps<SVGSVGElement> {
     | 'paragraph' | 'droplet' | 'expand' | 'collapse' | 'filter' | 'crosshair' | 'lightbox' | 'slider' | 'slide' | 'slides' | 'slide-button-prev' | 'slide-button-next'
     | 'slide-bullets' | 'slide-bullet' | 'slide-navigation' | 'slide-fraction' | 'loop-alternate' | 'loop-repeat' | 'listItem' | 'external-link'
     | 'settings' | 'center-block' | 'code-block' | 'table' | 'table-row' | 'table-cell' | 'add-column' | 'add-row' | 'delete-column' | 'delete-row' | 'delete-table' | 'header' | 'body'
+    | 'webflow' | 'figma' | 'space'
+    | 'arrow-left-up' | 'arrow-up' | 'arrow-right-up' | 'arrow-left' | 'arrow-right' | 'arrow-left-down' | 'arrow-down' | 'arrow-right-down' | 'circle'
   );
 }
 
@@ -1034,6 +1036,71 @@ const ICONS: Record<IconProps['name'], React.ReactNode> = {
   ),
   settings: (
     <path d="M3.0854 9C3.2913 8.4174 3.8469 8 4.5 8C5.1531 8 5.7087 8.4174 5.9147 9H11V10H5.9147C5.7087 10.5826 5.1531 11 4.5 11C3.8469 11 3.2913 10.5826 3.0854 10H1V9H3.0854ZM6.0854 5.5C6.2913 4.9174 6.8469 4.5 7.5 4.5C8.1531 4.5 8.7087 4.9174 8.9147 5.5H11V6.5H8.9147C8.7087 7.0826 8.1531 7.5 7.5 7.5C6.8469 7.5 6.2913 7.0826 6.0854 6.5H1V5.5H6.0854ZM3.0854 2C3.2913 1.4174 3.8469 1 4.5 1C5.1531 1 5.7087 1.4174 5.9147 2H11V3H5.9147C5.7087 3.5826 5.1531 4 4.5 4C3.8469 4 3.2913 3.5826 3.0854 3H1V2H3.0854Z" />
+  ),
+  // Brand marks scaled from a 0 0 24 24 source into the icon's 0 0 12 12 box.
+  webflow: (
+    <g transform="scale(0.5)">
+      <path d="M24 4.515l-7.658 14.97H9.149l3.205-6.204h-.144C9.566 16.713 5.621 18.973 0 19.485v-6.118s3.596-.213 5.71-2.435H0V4.515h6.417v5.278l.144-.001 2.622-5.277h4.854v5.244h.144l2.72-5.244H24z" />
+    </g>
+  ),
+  figma: (
+    <g transform="scale(0.5)">
+      <path d="M8 24c2.208 0 4-1.792 4-4v-4H8c-2.208 0-4 1.792-4 4s1.792 4 4 4zm-4-8c0-2.208 1.792-4 4-4h4v8H8c-2.208 0-4-1.792-4-4zm0-8c0-2.208 1.792-4 4-4h4v8H8c-2.208 0-4-1.792-4-4zm8-4h4c2.208 0 4 1.792 4 4s-1.792 4-4 4h-4V4zm0 8h4c2.208 0 4 1.792 4 4s-1.792 4-4 4-4-1.792-4-4v-4z" />
+    </g>
+  ),
+  space: (
+    <g transform="scale(0.5)">
+      <path d="M4 9V13H20V9H22V14C22 14.5523 21.5523 15 21 15H3C2.44772 15 2 14.5523 2 14V9H4Z" />
+    </g>
+  ),
+  // Remix line icons (0 0 24 24 source) scaled into the icon's 0 0 12 12 box.
+  'arrow-left-up': (
+    <g transform="scale(0.5)">
+      <path d="M9.41421 8L18.0208 16.6066L16.6066 18.0208L8 9.41421V17H6V6H17V8H9.41421Z" />
+    </g>
+  ),
+  'arrow-up': (
+    <g transform="scale(0.5)">
+      <path d="M13.0001 7.82843V20H11.0001V7.82843L5.63614 13.1924L4.22192 11.7782L12.0001 4L19.7783 11.7782L18.3641 13.1924L13.0001 7.82843Z" />
+    </g>
+  ),
+  'arrow-right-up': (
+    <g transform="scale(0.5)">
+      <path d="M16.0037 9.41421L7.39712 18.0208L5.98291 16.6066L14.5895 8H7.00373V6H18.0037V17H16.0037V9.41421Z" />
+    </g>
+  ),
+  'arrow-left': (
+    <g transform="scale(0.5)">
+      <path d="M7.82843 10.9999H20V12.9999H7.82843L13.1924 18.3638L11.7782 19.778L4 11.9999L11.7782 4.22168L13.1924 5.63589L7.82843 10.9999Z" />
+    </g>
+  ),
+  'arrow-right': (
+    <g transform="scale(0.5)">
+      <path d="M16.1716 10.9999L10.8076 5.63589L12.2218 4.22168L20 11.9999L12.2218 19.778L10.8076 18.3638L16.1716 12.9999H4V10.9999H16.1716Z" />
+    </g>
+  ),
+  'arrow-left-down': (
+    <g transform="scale(0.5)">
+      <path d="M9 13.589L17.6066 4.98242L19.0208 6.39664L10.4142 15.0032H18V17.0032H7V6.00324H9V13.589Z" />
+    </g>
+  ),
+  'arrow-down': (
+    <g transform="scale(0.5)">
+      <path d="M13.0001 16.1716L18.3641 10.8076L19.7783 12.2218L12.0001 20L4.22192 12.2218L5.63614 10.8076L11.0001 16.1716V4H13.0001V16.1716Z" />
+    </g>
+  ),
+  'arrow-right-down': (
+    <g transform="scale(0.5)">
+      <path d="M14.5895 16.0032L5.98291 7.39664L7.39712 5.98242L16.0037 14.589V7.00324H18.0037V18.0032H7.00373V16.0032H14.5895Z" />
+    </g>
+  ),
+  circle: (
+    <g transform="translate(1.8 1.8) scale(0.35)">
+      <path
+        fillRule="evenodd"
+        d="M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0ZM5.5 12a6.5 6.5 0 1 1 13 0 6.5 6.5 0 0 1-13 0Z"
+      />
+    </g>
   ),
 };
 

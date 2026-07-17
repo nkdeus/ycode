@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
 import { InputAutocomplete } from '@/components/ui/input-autocomplete';
-import { LOCALES, extractPageTranslatableItems, extractFolderTranslatableItems, extractComponentTranslatableItems, extractCmsTranslatableItems } from '@/lib/localisation-utils';
+import { LOCALES, sanitizeRegionCode, buildLocaleCode, parseLocaleCode, isValidLocaleCode, extractPageTranslatableItems, extractFolderTranslatableItems, extractComponentTranslatableItems, extractCmsTranslatableItems } from '@/lib/localisation-utils';
 import { findLayerById } from '@/lib/layer-utils';
 import { buildFieldGroupsForLayer } from '@/lib/collection-field-utils';
 import type { TranslatableItem } from '@/lib/localisation-utils';
@@ -33,11 +33,16 @@ interface LocalizationContentProps {
   children: React.ReactNode;
 }
 
+// Minimum number of characters before a search query is applied.
+const MIN_SEARCH_LENGTH = 2;
+
 interface ModalState {
   isOpen: boolean;
   isEditMode: boolean;
   editingLocaleId: string | null;
   selectedLanguage: LocaleOption | null;
+  localeCode: string;
+  regionCode: string;
   customLocaleName: string;
   isDefaultLocale: boolean;
   localeSearch: string;
@@ -48,6 +53,8 @@ const initialModalState: ModalState = {
   isEditMode: false,
   editingLocaleId: null,
   selectedLanguage: null,
+  localeCode: '',
+  regionCode: '',
   customLocaleName: '',
   isDefaultLocale: false,
   localeSearch: '',
@@ -107,6 +114,19 @@ export default function LocalizationContent({ children }: LocalizationContentPro
     return buildFieldGroupsForLayer(layerId, layers, page || null, allFields, collections);
   };
 
+  /**
+   * Resolve the layer behind a translation item so the editor gets layer context
+   * (e.g. to expose pagination variables for count/info layers).
+   */
+  const findLayerForTranslationItem = (
+    item: TranslatableItem,
+    layers: Layer[],
+  ): Layer | null => {
+    const match = item.content_key.match(/^layer:([^:]+):/);
+    if (!match) return null;
+    return findLayerById(layers, match[1]) || null;
+  };
+
   // URL management
   const router = useRouter();
   const pathname = usePathname();
@@ -124,6 +144,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
   const [searchQuery, setSearchQuery] = useState<string>(() => {
     return searchParams?.get('search') || '';
   });
+  const isSearchActive = searchQuery.trim().length >= MIN_SEARCH_LENGTH;
   const [expandedPages, setExpandedPages] = useState<Set<string>>(new Set());
   // Local input values for immediate UI feedback (keyed by item.key)
   const [localInputValues, setLocalInputValues] = useState<Record<string, string>>({});
@@ -240,8 +261,8 @@ export default function LocalizationContent({ children }: LocalizationContentPro
         }
       }
 
-      // Filter by search query
-      if (searchQuery.trim()) {
+      // Filter by search query (requires a minimum query length)
+      if (isSearchActive) {
         const query = searchQuery.toLowerCase().trim();
         const originalContent = item.content_value?.toLowerCase() || '';
         const label = item.info?.label?.toLowerCase() || '';
@@ -334,12 +355,51 @@ export default function LocalizationContent({ children }: LocalizationContentPro
     });
   }, [storeFolders]);
 
-  // Initialize expanded pages when pages change
-  useEffect(() => {
-    if (sortedPages.length > 0 && expandedPages.size === 0) {
-      setExpandedPages(new Set(sortedPages.map(p => p.id)));
+  // Ordered ids of the collapsible sections for the active content type.
+  // Pages and CMS items share the same accordion/expansion behaviour.
+  const sectionIds = useMemo(() => {
+    if (selectedContentType === 'cms') {
+      return collections.flatMap(collection =>
+        (items[collection.id] || [])
+          .filter(item => !item.is_published)
+          .map(item => item.id)
+      );
     }
-  }, [sortedPages, expandedPages.size]);
+    return sortedPages.map(p => p.id);
+  }, [selectedContentType, collections, items, sortedPages]);
+
+  // Expand only the first section by default — rendering every section's
+  // translation rows at once slows the page considerably. Re-initialises when
+  // the content type changes (so switching to CMS expands its first item),
+  // but collapsing sections within a type doesn't re-trigger the auto-expand.
+  const initializedExpandedType = useRef<string | null>(null);
+  useEffect(() => {
+    if (initializedExpandedType.current === selectedContentType) return;
+    if (sectionIds.length === 0) return;
+    // Respect a deep-linked search: expand all when active, else first only.
+    setExpandedPages(
+      isSearchActive ? new Set(sectionIds) : new Set([sectionIds[0]])
+    );
+    initializedExpandedType.current = selectedContentType;
+  }, [selectedContentType, sectionIds, isSearchActive]);
+
+  // Update the search query and adjust section expansion in the SAME batched
+  // update. Doing this in a follow-up effect would briefly render an
+  // intermediate state (search inactive but all sections still expanded ⇒
+  // every section's items rendered at once), which is very slow on large sites.
+  // While searching, expand all sections so matches are visible; when search
+  // drops below the threshold, collapse back to just the first (accordion).
+  const handleSearchChange = (value: string) => {
+    const nowActive = value.trim().length >= MIN_SEARCH_LENGTH;
+    if (nowActive !== isSearchActive) {
+      setExpandedPages(
+        nowActive
+          ? new Set(sectionIds)
+          : new Set(sectionIds.length > 0 ? [sectionIds[0]] : [])
+      );
+    }
+    setSearchQuery(value);
+  };
 
   // Build full page path segments for display
   const getPagePathSegments = (page: typeof sortedPages[0]): string[] => {
@@ -348,17 +408,51 @@ export default function LocalizationContent({ children }: LocalizationContentPro
     return [...folderSegments, page.name];
   };
 
+  // Refs for scrolling a freshly-expanded section to the top of the viewport.
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const pendingScrollPageId = useRef<string | null>(null);
+
   const togglePageExpansion = (pageId: string) => {
     setExpandedPages(prev => {
       const next = new Set(prev);
       if (next.has(pageId)) {
         next.delete(pageId);
       } else {
+        // Accordion: only one section open at a time, unless a search is
+        // active (then matching sections can stay expanded together).
+        if (!isSearchActive) {
+          next.clear();
+        }
         next.add(pageId);
+        // Scroll this section to the top once it's expanded (and others
+        // collapsed) — handled in an effect after the layout settles.
+        pendingScrollPageId.current = pageId;
       }
       return next;
     });
   };
+
+  // After expansion changes, scroll the just-expanded section's header just
+  // below the sticky toolbar. rAF waits for the collapse/expand layout shift.
+  useEffect(() => {
+    const pageId = pendingScrollPageId.current;
+    if (!pageId) return;
+    pendingScrollPageId.current = null;
+
+    const container = scrollContainerRef.current;
+    const section = sectionRefs.current.get(pageId);
+    if (!container || !section) return;
+
+    requestAnimationFrame(() => {
+      const TOOLBAR_HEIGHT = 64; // sticky toolbar (h-16)
+      const delta =
+        section.getBoundingClientRect().top -
+        container.getBoundingClientRect().top -
+        TOOLBAR_HEIGHT;
+      container.scrollTo({ top: container.scrollTop + delta, behavior: 'smooth' });
+    });
+  }, [expandedPages]);
 
   // Helper functions for managing local input values
   const handleLocalValueChange = (key: string, value: string) => {
@@ -380,14 +474,30 @@ export default function LocalizationContent({ children }: LocalizationContentPro
   const existingLocaleCodes = new Set(locales.map(l => l.code));
   const availableLocales = LOCALES.filter(l => !existingLocaleCodes.has(l.code));
 
+  // Combine the picker-driven base language with the editable region subtag,
+  // then validate the result against its BCP-47 shape and existing locales
+  // (excluding the one currently being edited).
+  const fullLocaleCode = buildLocaleCode(modalState.localeCode, modalState.regionCode);
+  const isDuplicateLocaleCode = locales.some(
+    l => l.code === fullLocaleCode && l.id !== modalState.editingLocaleId
+  );
+  const isLocaleCodeValid = !!modalState.localeCode && isValidLocaleCode(fullLocaleCode) && !isDuplicateLocaleCode;
+
+  const localeCodeError = (() => {
+    if (!modalState.localeCode || !modalState.regionCode) return null;
+    if (isDuplicateLocaleCode) return 'This locale code already exists.';
+    if (!isValidLocaleCode(fullLocaleCode)) return 'Enter a valid region like "BE".';
+    return null;
+  })();
+
   const handleAddLocale = async () => {
-    if (!modalState.selectedLanguage || !modalState.customLocaleName.trim()) {
+    if (!isLocaleCodeValid || !modalState.customLocaleName.trim()) {
       return;
     }
 
     try {
       const newLocale = await createLocale({
-        code: modalState.selectedLanguage.code,
+        code: fullLocaleCode,
         label: modalState.customLocaleName.trim(),
         is_default: modalState.isDefaultLocale,
       });
@@ -402,12 +512,13 @@ export default function LocalizationContent({ children }: LocalizationContentPro
   };
 
   const handleUpdateLocale = async () => {
-    if (!modalState.editingLocaleId || !modalState.customLocaleName.trim()) {
+    if (!modalState.editingLocaleId || !isLocaleCodeValid || !modalState.customLocaleName.trim()) {
       return;
     }
 
     try {
       await updateLocale(modalState.editingLocaleId, {
+        code: fullLocaleCode,
         label: modalState.customLocaleName.trim(),
         is_default: modalState.isDefaultLocale,
       });
@@ -434,14 +545,18 @@ export default function LocalizationContent({ children }: LocalizationContentPro
   const handleOpenEditDialog = (locale: Locale) => {
     clearError();
 
-    // Set the selected language to show in the disabled selector
-    const localeOption = LOCALES.find(l => l.code === locale.code);
+    // Split the stored code into its base language and region parts so each
+    // maps to its own input.
+    const { language, region } = parseLocaleCode(locale.code);
+    const localeOption = LOCALES.find(l => l.code === language);
 
     setModalState({
       isOpen: true,
       isEditMode: true,
       editingLocaleId: locale.id,
       customLocaleName: locale.label,
+      localeCode: language,
+      regionCode: region,
       isDefaultLocale: locale.is_default,
       selectedLanguage: localeOption || null,
       localeSearch: localeOption?.label || '',
@@ -461,15 +576,21 @@ export default function LocalizationContent({ children }: LocalizationContentPro
         ...prev,
         selectedLanguage: null,
         localeSearch: '',
+        localeCode: '',
+        regionCode: '',
         customLocaleName: '',
       }));
       return;
     }
 
+    const { language, region } = parseLocaleCode(locale.code);
+
     setModalState(prev => ({
       ...prev,
       localeSearch: locale.label,
       selectedLanguage: locale,
+      localeCode: language,
+      regionCode: region,
       customLocaleName: locale.label,
     }));
   };
@@ -512,7 +633,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                   onClick={() => setSelectedLocaleId(locale.id)}
                 >
                   <div className="flex items-center flex-1 outline-none focus:outline-none select-none text-left text-xs gap-1.5 min-w-0">
-                    <span className="bg-secondary text-[10px] font-semibold py-0.5 px-1.5 rounded-[6px] uppercase shrink-0">{locale.code}</span>
+                    <span className="bg-secondary text-secondary-foreground text-[10px] font-semibold py-0.5 px-1.5 rounded-[6px] uppercase shrink-0">{locale.code}</span>
                     <Label className="cursor-[inherit] min-w-0 flex-1">
                       <div className="truncate">{locale.label}</div>
                     </Label>
@@ -543,7 +664,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
         {selectedLocale ? (
           <div className="flex flex-col min-h-full">
             <div className="sticky top-0 z-10 h-16 bg-background p-4 flex items-center gap-2 border-b">
@@ -580,7 +701,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                   <InputGroupInput
                     placeholder="Search..."
                     value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onChange={(e) => handleSearchChange(e.target.value)}
                   />
                   <InputGroupAddon>
                     <Icon name="search" className="size-3" />
@@ -588,6 +709,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                 </InputGroup>
               </div>
 
+              {/*
               <div className="ml-auto">
                 <Button
                   size="sm"
@@ -597,6 +719,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                   Auto-translate
                 </Button>
               </div>
+              */}
             </div>
 
             {/* Loading state */}
@@ -638,7 +761,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                         const draft = draftsByPageId[page.id];
                         const layers = draft?.layers || [];
                         const selectedLocale = locales.find(l => l.id === selectedLocaleId);
-                        const translatableItems = extractPageTranslatableItems(page, layers, selectedLocale);
+                        const translatableItems = extractPageTranslatableItems(page, layers, selectedLocale, storeComponents);
                         const filteredItems = filterTranslatableItems(translatableItems);
 
                         if (filteredItems.length === 0) {
@@ -648,9 +771,15 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                         const isExpanded = expandedPages.has(page.id);
 
                         return (
-                          <div key={page.id}>
+                          <div
+                            key={page.id}
+                            ref={(el) => {
+                              if (el) sectionRefs.current.set(page.id, el);
+                              else sectionRefs.current.delete(page.id);
+                            }}
+                          >
                             <header
-                              className="sticky top-16 z-[5] border-b cursor-pointer bg-background"
+                              className="sticky top-16 z-5 border-b cursor-pointer bg-background"
                               onClick={() => togglePageExpansion(page.id)}
                             >
                               <div className="p-4 flex items-center gap-1.5 bg-secondary/10 hover:bg-secondary/35 transition-colors">
@@ -666,7 +795,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                                   <Icon name={getPageIcon(page)} className="size-3 opacity-60" />
                                 </div>
 
-                                <Label className="flex items-center gap-1">
+                                <Label className="flex items-center gap-1 cursor-pointer">
                                   {getPagePathSegments(page).map((segment, index, array) => (
                                     <React.Fragment key={index}>
                                       <span>{segment}</span>
@@ -702,6 +831,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                                     updateTranslationStatus={updateTranslationStatus}
                                     deleteTranslation={deleteTranslation}
                                     fieldGroups={buildFieldGroupsForTranslationItem(item, layers, page)}
+                                    layer={findLayerForTranslationItem(item, layers)}
                                     allFields={allFields}
                                     collections={collections}
                                     pages={storePages}
@@ -739,7 +869,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
 
                           return (
                           <div key={folder.id}>
-                            <header className="sticky top-16 z-[5] border-b bg-background">
+                            <header className="sticky top-16 z-5 border-b bg-background">
                               <div className="p-4 flex items-center gap-1.5 bg-secondary/10">
                                 <div className="size-5.5 flex items-center justify-center rounded-[6px] bg-secondary/50">
                                   <Icon name="folder" className="size-3 opacity-60" />
@@ -820,7 +950,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
 
                         return (
                           <div key={component.id}>
-                            <header className="sticky top-16 z-[5] border-b bg-background">
+                            <header className="sticky top-16 z-5 border-b bg-background">
                               <div className="p-4 flex items-center gap-1.5 bg-secondary/10">
                                 <div className="size-5.5 flex items-center justify-center rounded-[6px] bg-secondary/50">
                                   <Icon name="component" className="size-3 opacity-60" />
@@ -852,6 +982,7 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                                   updateTranslationStatus={updateTranslationStatus}
                                   deleteTranslation={deleteTranslation}
                                   fieldGroups={buildFieldGroupsForTranslationItem(item, layers)}
+                                  layer={findLayerForTranslationItem(item, layers)}
                                   allFields={allFields}
                                   collections={collections}
                                 />
@@ -900,15 +1031,34 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                           const nameField = collectionFields.find(f => f.type === 'text' && f.fillable);
                           const itemName = nameField ? item.values[nameField.id] || item.id.substring(0, 8) : item.id.substring(0, 8);
 
+                          const isExpanded = expandedPages.has(item.id);
+
                           return (
-                            <div key={item.id}>
-                              <header className="sticky top-16 z-[5] border-b bg-background">
-                                <div className="p-4 flex items-center gap-1.5 bg-secondary/10">
+                            <div
+                              key={item.id}
+                              ref={(el) => {
+                                if (el) sectionRefs.current.set(item.id, el);
+                                else sectionRefs.current.delete(item.id);
+                              }}
+                            >
+                              <header
+                                className="sticky top-16 z-5 border-b cursor-pointer bg-background"
+                                onClick={() => togglePageExpansion(item.id)}
+                              >
+                                <div className="p-4 flex items-center gap-1.5 bg-secondary/10 hover:bg-secondary/35 transition-colors">
+                                  <Icon
+                                    name="chevronRight"
+                                    className={cn(
+                                      'size-3 transition-transform',
+                                      isExpanded && 'rotate-90'
+                                    )}
+                                  />
+
                                   <div className="size-5.5 flex items-center justify-center rounded-[6px] bg-secondary/50">
                                     <Icon name="database" className="size-3 opacity-60" />
                                   </div>
 
-                                  <Label>{collection.name} <span className="text-muted-foreground">›</span> {itemName}</Label>
+                                  <Label className="cursor-pointer">{collection.name} <span className="text-muted-foreground">›</span> {itemName}</Label>
 
                                   <span className="flex items-center gap-1.5 ml-auto text-xs text-muted-foreground">
                                   <span>{defaultLocale?.label}</span>
@@ -917,29 +1067,32 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                                 </span>
                                 </div>
                               </header>
-                              <ul className="border-b px-4 py-5 flex flex-col gap-5">
-                                {filteredItems.map((transItem) => (
-                                  <TranslationRow
-                                    key={transItem.key}
-                                    item={transItem}
-                                    selectedLocaleId={selectedLocaleId}
-                                    localInputValues={localInputValues}
-                                    onLocalValueChange={handleLocalValueChange}
-                                    onLocalValueClear={handleLocalValueClear}
-                                    getTranslationByKey={getTranslationByKey}
-                                    createTranslation={createTranslation}
-                                    updateTranslation={updateTranslation}
-                                    updateTranslationValue={updateTranslationValue}
-                                    updateTranslationStatus={updateTranslationStatus}
-                                    deleteTranslation={deleteTranslation}
-                                    allFields={allFields}
-                                    collections={collections}
-                                    pages={storePages}
-                                    folders={storeFolders}
-                                    sourceItem={undefined}
-                                  />
-                                ))}
-                              </ul>
+
+                              {isExpanded && (
+                                <ul className="border-b px-4 py-5 flex flex-col gap-5">
+                                  {filteredItems.map((transItem) => (
+                                    <TranslationRow
+                                      key={transItem.key}
+                                      item={transItem}
+                                      selectedLocaleId={selectedLocaleId}
+                                      localInputValues={localInputValues}
+                                      onLocalValueChange={handleLocalValueChange}
+                                      onLocalValueClear={handleLocalValueClear}
+                                      getTranslationByKey={getTranslationByKey}
+                                      createTranslation={createTranslation}
+                                      updateTranslation={updateTranslation}
+                                      updateTranslationValue={updateTranslationValue}
+                                      updateTranslationStatus={updateTranslationStatus}
+                                      deleteTranslation={deleteTranslation}
+                                      allFields={allFields}
+                                      collections={collections}
+                                      pages={storePages}
+                                      folders={storeFolders}
+                                      sourceItem={undefined}
+                                    />
+                                  ))}
+                                </ul>
+                              )}
                             </div>
                           );
                         }).filter(Boolean);
@@ -1007,26 +1160,47 @@ export default function LocalizationContent({ children }: LocalizationContentPro
               />
             </div>
 
-            <div className="flex gap-3">
-              <div className="flex flex-col gap-2 flex-1">
-                <Label htmlFor="name">Custom name</Label>
-                <Input
-                  id="name"
-                  value={modalState.customLocaleName}
-                  onChange={(e) => setModalState(prev => ({ ...prev, customLocaleName: e.target.value }))}
-                  placeholder="Custom name"
-                />
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-3">
+                <div className="flex flex-col gap-2 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="name">Custom name</Label>
+                    {fullLocaleCode && (
+                      <span className="text-xs text-muted-foreground uppercase">{fullLocaleCode}</span>
+                    )}
+                  </div>
+                  <Input
+                    id="name"
+                    value={modalState.customLocaleName}
+                    onChange={(e) => setModalState(prev => ({ ...prev, customLocaleName: e.target.value }))}
+                    placeholder="Custom name"
+                  />
+                </div>
+                <div className="flex flex-col gap-2 w-24">
+                  <Label htmlFor="code" className="whitespace-nowrap">Locale code</Label>
+                  <Input
+                    id="code"
+                    value={modalState.localeCode}
+                    disabled
+                    placeholder="Code"
+                    className={modalState.localeCode ? 'uppercase' : ''}
+                  />
+                </div>
+                <div className="flex flex-col gap-2 w-24">
+                  <Label htmlFor="region" className="whitespace-nowrap">Regional code</Label>
+                  <Input
+                    id="region"
+                    value={modalState.regionCode}
+                    onChange={(e) => setModalState(prev => ({ ...prev, regionCode: sanitizeRegionCode(e.target.value) }))}
+                    placeholder="e.g. BE"
+                    disabled={!modalState.localeCode}
+                    className={cn(modalState.regionCode && 'uppercase', localeCodeError && 'border-destructive')}
+                  />
+                </div>
               </div>
-              <div className="flex flex-col gap-2 flex-1">
-                <Label htmlFor="code">Locale code</Label>
-                <Input
-                  id="code"
-                  value={modalState.selectedLanguage?.code || ''}
-                  disabled
-                  placeholder="Code"
-                  className={modalState.selectedLanguage?.code ? 'uppercase' : ''}
-                />
-              </div>
+              {localeCodeError && (
+                <span className="text-xs text-destructive">{localeCodeError}</span>
+              )}
             </div>
 
             {(() => {
@@ -1115,8 +1289,8 @@ export default function LocalizationContent({ children }: LocalizationContentPro
                 onClick={modalState.isEditMode ? handleUpdateLocale : handleAddLocale}
                 disabled={
                   modalState.isEditMode
-                    ? !modalState.customLocaleName.trim() || isLoading.update
-                    : !modalState.selectedLanguage || !modalState.customLocaleName.trim() || isLoading.create
+                    ? !isLocaleCodeValid || !modalState.customLocaleName.trim() || isLoading.update
+                    : !isLocaleCodeValid || !modalState.customLocaleName.trim() || isLoading.create
                 }
                 size="sm"
               >

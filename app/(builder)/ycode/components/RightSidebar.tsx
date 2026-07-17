@@ -34,6 +34,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 // 4. Internal components
 import AddAttributeModal from './AddAttributeModal';
 import BackgroundsControls from './BackgroundsControls';
+import CustomAttributeRow from './CustomAttributeRow';
 import BorderControls from './BorderControls';
 import ComponentVariablesDialog from './ComponentVariablesDialog';
 import EffectControls from './EffectControls';
@@ -61,6 +62,7 @@ import RichTextEditor from './RichTextEditor';
 import ComponentVariableLabel, { VARIABLE_TYPE_ICONS } from './ComponentVariableLabel';
 import InteractionsPanel from './InteractionsPanel';
 import LayoutControls from './LayoutControls';
+import SelfLayoutControls from './SelfLayoutControls';
 import LayerStylesPanel from './LayerStylesPanel';
 import PositionControls from './PositionControls';
 import TransformControls from './TransformControls';
@@ -77,6 +79,7 @@ import { useEditorStore } from '@/stores/useEditorStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { usePagesStore } from '@/stores/usePagesStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
+import { useGlobalsStore } from '@/stores/useGlobalsStore';
 import { useLayerStylesStore } from '@/stores/useLayerStylesStore';
 import { useCanvasTextEditorStore } from '@/stores/useCanvasTextEditorStore';
 import { useEditorActions, useEditorUrl } from '@/hooks/use-editor-url';
@@ -89,23 +92,24 @@ import { useLocalisationStore } from '@/stores/useLocalisationStore';
 import { useLayerLocks } from '@/hooks/use-layer-locks';
 
 // 6. Utils, APIs, lib
-import { classesToDesign, mergeDesign, removeConflictsForClass, getRemovedPropertyClasses } from '@/lib/tailwind-class-mapper';
-import { resetLayerToStyle, hasStyleOverrides } from '@/lib/layer-style-utils';
-import { updateStyleAcrossStores } from '@/lib/layer-style-store-utils';
-import { useLiveLayerStyleUpdates } from '@/hooks/use-live-layer-style-updates';
+import { classesToDesign, mergeDesign, removeConflictsForClass, removeRedundantSpacingShorthands } from '@/lib/tailwind-class-mapper';
+import { getStyleIds } from '@/lib/layer-style-utils';
+import { resolveLayerClasses, chipClasses } from '@/lib/layer-style-resolve';
+import { buildDesign } from '@/lib/import/design';
 import { cn } from '@/lib/utils';
 import { sanitizeHtmlId } from '@/lib/html-utils';
 import { isFieldVariable, getCollectionVariable, findParentCollectionLayer, findAllParentCollectionLayers, isTextEditable, isTextContentLayer, isRichTextLayer, isHeadingLayer, findLayerWithParent, resetBindingsOnCollectionSourceChange, isInputInsideFilter, resolveFilterInputId, getLayerIndexes, indexedFindLayerById, indexedFindLayerWithParent, indexedFindParentCollectionLayer } from '@/lib/layer-utils';
 import { detachSpecificLayerFromComponent } from '@/lib/component-utils';
 import { convertContentToValue, parseValueToContent } from '@/lib/cms-variables-utils';
+import { defaultPaginationCountDoc, defaultPaginationInfoDoc } from '@/lib/pagination-text-utils';
 import { createTextComponentVariableValue } from '@/lib/variable-utils';
 import { getRichTextValue, extractPlainTextFromTiptap, getSoleCmsFieldBinding } from '@/lib/tiptap-utils';
 import { DEFAULT_TEXT_STYLES, getTextStyle, getTiptapTextContent } from '@/lib/text-format-utils';
-import { buildFieldGroupsForLayer, getFieldIcon, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
+import { buildFieldGroupsForLayer, getFieldIcon, hasBoundCollectionSource, isMultipleAssetField, MULTI_ASSET_COLLECTION_ID, SIMPLE_TEXT_FIELD_TYPES } from '@/lib/collection-field-utils';
 import { getInverseReferenceFields } from '@/lib/collection-utils';
 
 // 7. Types
-import type { Layer, FieldVariable, CollectionField, CollectionVariable, ComponentVariable } from '@/types';
+import type { Layer, FieldVariable, CollectionField, CollectionVariable, ComponentVariable, BackgroundsDesign } from '@/types';
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import {
   DropdownMenu,
@@ -130,6 +134,27 @@ function pruneTextDescendants(children: Layer[] | undefined): Layer[] {
   return children
     .filter(c => !isTextContentLayer(c))
     .map(c => (c.children?.length ? { ...c, children: pruneTextDescendants(c.children) } : c));
+}
+
+/** The non-empty gradient/image CSS var maps from a backgrounds design object. */
+type BgVars = Pick<BackgroundsDesign, 'bgGradientVars' | 'bgImageVars'>;
+
+/**
+ * Extract the background gradient/image CSS var maps from a backgrounds design.
+ *
+ * These live in `design.backgrounds.bgGradientVars` / `bgImageVars` and hold the
+ * actual gradient/image values keyed by breakpoint+state. They are NOT encoded
+ * in Tailwind classes (the class only references `var(--bg-img)`), so any code
+ * that regenerates design from classes via `buildDesign` would drop them. The
+ * layer-style system round-trips through classes, so these vars must be carried
+ * through explicitly. Returns undefined when neither map has entries.
+ */
+function extractBgVars(bg: BackgroundsDesign | undefined): BgVars | undefined {
+  if (!bg) return undefined;
+  const out: BgVars = {};
+  if (bg.bgGradientVars && Object.keys(bg.bgGradientVars).length > 0) out.bgGradientVars = bg.bgGradientVars;
+  if (bg.bgImageVars && Object.keys(bg.bgImageVars).length > 0) out.bgImageVars = bg.bgImageVars;
+  return out.bgGradientVars || out.bgImageVars ? out : undefined;
 }
 
 const RightSidebar = React.memo(function RightSidebar({
@@ -197,6 +222,7 @@ const RightSidebar = React.memo(function RightSidebar({
   }, [urlState.rightTab, activeTab]);
 
   const [currentClassInput, setCurrentClassInput] = useState<string>('');
+  const classInputRef = useRef<HTMLInputElement>(null);
   const [customId, setCustomId] = useState<string>('');
   const [containerTag, setContainerTag] = useState<string>('div');
   const [textTag, setTextTag] = useState<string>('p');
@@ -258,6 +284,7 @@ const RightSidebar = React.memo(function RightSidebar({
   const collections = useCollectionsStore((state) => state.collections);
   const fields = useCollectionsStore((state) => state.fields);
   const loadFields = useCollectionsStore((state) => state.loadFields);
+  const globals = useGlobalsStore((state) => state.globals);
 
   // Resolve the active variant id while editing a component, falling back to
   // the first variant if state references a stale id.
@@ -348,6 +375,14 @@ const RightSidebar = React.memo(function RightSidebar({
     if (!selectedLayerId) return false;
     const result = indexedFindLayerWithParent(layerIndexes, selectedLayerId);
     return result?.parent === null;
+  }, [selectedLayerId, layerIndexes]);
+
+  // Parent of the selected layer - drives the align-self control (its axis and
+  // visibility depend on the parent's flex/grid layout, not the layer's own)
+  const selectedLayerParent: Layer | null = useMemo(() => {
+    if (!selectedLayerId) return null;
+    const result = indexedFindLayerWithParent(layerIndexes, selectedLayerId);
+    return result?.parent ?? null;
   }, [selectedLayerId, layerIndexes]);
 
   // Check if selected collection is nested inside another collection
@@ -708,7 +743,11 @@ const RightSidebar = React.memo(function RightSidebar({
     }
   }, [selectedLayer, showTextStyleControls, activeTextStyleKey]);
 
-  // Lock-aware update function
+  // Tracks the active chip so design edits route to the right per-chip override.
+  // Set during render once `activeLayerStyleId` is computed below.
+  const activeStyleIdRef = useRef<string | null>(null);
+
+  // Lock-aware update function.
   const handleLayerUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
     if (isLockedByOther) {
       console.warn('Cannot update layer - locked by another user');
@@ -724,60 +763,134 @@ const RightSidebar = React.memo(function RightSidebar({
 
   // Get applied layer style and its classes
   const getStyleById = useLayerStylesStore((state) => state.getStyleById);
-  const updateStyle = useLayerStylesStore((state) => state.updateStyle);
-  const liveLayerStyleUpdates = useLiveLayerStyleUpdates();
-  const appliedStyle = selectedLayer?.styleId ? getStyleById(selectedLayer.styleId) : undefined;
-  const styleClassesArray = useMemo(() => {
-    if (!appliedStyle || !appliedStyle.classes) return [];
-    const styleClasses = Array.isArray(appliedStyle.classes)
-      ? appliedStyle.classes.join(' ')
-      : appliedStyle.classes;
-    return styleClasses.split(' ').filter(cls => cls.trim() !== '');
-  }, [appliedStyle]);
+  const allStyles = useLayerStylesStore((state) => state.styles);
+  const stylesById = useMemo(
+    () => new Map(allStyles.map((s) => [s.id, s])),
+    [allStyles]
+  );
+  // The layer's full applied style stack (combo classes), low -> high priority.
+  const appliedStyleIds = useMemo(
+    () => (selectedLayer ? getStyleIds(selectedLayer) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedLayer?.styleIds, selectedLayer?.styleId]
+  );
 
-  // Filter layer classes to only show those NOT in the style
-  const layerOnlyClasses = useMemo(() => {
-    if (styleClassesArray.length === 0) return classesArray;
-    return classesArray.filter(cls => !styleClassesArray.includes(cls));
-  }, [classesArray, styleClassesArray]);
+  // The "active" style chip — the one whose classes/properties the design panel
+  // shows and edits. Clicking a chip in LayerStylesPanel changes it; it defaults
+  // to the highest-priority (last) style. Editing a property while a chip is
+  // active writes a per-chip override (`styleOverridesByStyle`), so only the
+  // selected element changes and the customization is unique to that chip.
+  const [activeStyleId, setActiveStyleId] = useState<string | null>(null);
+  const activeLayerStyleId = appliedStyleIds.length > 0
+    ? (activeStyleId && appliedStyleIds.includes(activeStyleId)
+      ? activeStyleId
+      : appliedStyleIds[appliedStyleIds.length - 1])
+    : null;
+  activeStyleIdRef.current = activeLayerStyleId;
 
-  // Determine which style classes are overridden by layer's custom classes or explicitly removed
-  const overriddenStyleClasses = useMemo(() => {
-    if (styleClassesArray.length === 0) return new Set<string>();
-    const overridden = new Set<string>();
+  const activeChipStyle = activeLayerStyleId ? getStyleById(activeLayerStyleId) : undefined;
 
-    // 1. Check for style classes explicitly removed (not present in layer classes at all)
-    for (const styleClass of styleClassesArray) {
-      if (!classesArray.includes(styleClass)) {
-        overridden.add(styleClass);
-      }
+  // The active chip's effective classes for THIS layer: its per-chip override if
+  // one exists, else the shared style's own classes.
+  const activeChipClassTokens = useMemo(() => {
+    if (!selectedLayer || !activeLayerStyleId) return [];
+    return chipClasses(selectedLayer, activeLayerStyleId, stylesById)
+      .split(' ')
+      .filter(cls => cls.trim() !== '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLayer?.id, activeLayerStyleId, selectedLayer?.styleOverridesByStyle, stylesById]);
+
+  // A proxy layer the design controls bind to when a chip is active: it carries
+  // the active chip's classes/design (no style links) so the panel reflects that
+  // chip. Edits are intercepted by `handleDesignUpdate` and stored as a per-chip
+  // override on the real layer.
+  const designLayer = useMemo<Layer | null>(() => {
+    if (!selectedLayer) return null;
+    if (!activeLayerStyleId) return selectedLayer;
+    const cls = activeChipClassTokens.join(' ');
+    const { styleId: _s, styleIds: _ss, styleOverrides: _so, styleOverridesByStyle: _sm, ...rest } = selectedLayer;
+    const design = buildDesign(cls);
+    // Background gradient/image vars can't be reconstructed from classes, so carry
+    // the layer's own vars onto the proxy — otherwise the panel wouldn't show an
+    // applied gradient and the background handlers would misread the current state.
+    const bgVars = extractBgVars(selectedLayer.design?.backgrounds);
+    if (bgVars && design) {
+      design.backgrounds = { ...design.backgrounds, ...bgVars };
     }
+    return { ...rest, classes: cls, design };
+  }, [selectedLayer, activeLayerStyleId, activeChipClassTokens]);
 
-    // 2. Check for classes overridden by layer's custom classes (conflict detection)
-    if (layerOnlyClasses.length > 0) {
-      for (const layerClass of layerOnlyClasses) {
-        const classesWithoutConflicts = removeConflictsForClass(styleClassesArray, layerClass);
-
-        for (const styleClass of styleClassesArray) {
-          if (!classesWithoutConflicts.includes(styleClass)) {
-            overridden.add(styleClass);
-          }
-        }
-      }
+  // Store an edited class string as the active chip's override (or clear it when
+  // it matches the shared style again), then re-flatten the whole stack so the
+  // canvas renders the resolved cascade. Only THIS layer changes.
+  const applyChipClasses = useCallback((chipId: string, newClassesStr: string, bgVars?: BgVars) => {
+    if (!selectedLayer) return;
+    const map: NonNullable<Layer['styleOverridesByStyle']> = { ...(selectedLayer.styleOverridesByStyle ?? {}) };
+    const styleTokens = (stylesById.get(chipId)?.classes ?? '').split(' ').filter(Boolean).sort().join(' ');
+    const nextTokens = newClassesStr.split(' ').filter(Boolean).sort().join(' ');
+    if (nextTokens === styleTokens) {
+      delete map[chipId];
+    } else {
+      map[chipId] = { classes: newClassesStr, design: buildDesign(newClassesStr) };
     }
-
-    // 3. Check for classes from properties explicitly removed on the layer
-    if (appliedStyle?.design && selectedLayer) {
-      const removedClasses = getRemovedPropertyClasses(
-        selectedLayer.design,
-        appliedStyle.design,
-        styleClassesArray
-      );
-      removedClasses.forEach(cls => overridden.add(cls));
+    const hasMap = Object.keys(map).length > 0;
+    // Per-chip overrides supersede the legacy single-blob override; drop it so a
+    // stale blob can't mask the edit at the top of the cascade.
+    const probe: Pick<Layer, 'styleIds' | 'styleOverridesByStyle' | 'styleOverrides'> = {
+      styleIds: appliedStyleIds,
+      styleOverridesByStyle: hasMap ? map : undefined,
+    };
+    const resolved = resolveLayerClasses(probe, stylesById);
+    const design = buildDesign(resolved);
+    // Reapply the background gradient/image vars, which `buildDesign` can't recover
+    // from classes. When the caller supplies `bgVars` (a background edit) it is
+    // authoritative — including removals; otherwise preserve the layer's existing
+    // vars so unrelated edits don't wipe an applied gradient/image.
+    const effectiveBgVars = bgVars !== undefined ? bgVars : extractBgVars(selectedLayer.design?.backgrounds);
+    if (design && effectiveBgVars && (effectiveBgVars.bgGradientVars || effectiveBgVars.bgImageVars)) {
+      design.backgrounds = { ...design.backgrounds, ...effectiveBgVars };
     }
+    handleLayerUpdate(selectedLayer.id, {
+      styleOverridesByStyle: hasMap ? map : undefined,
+      styleOverrides: undefined,
+      classes: resolved,
+      design,
+    });
+  }, [selectedLayer, appliedStyleIds, stylesById, handleLayerUpdate]);
 
-    return overridden;
-  }, [classesArray, layerOnlyClasses, styleClassesArray, appliedStyle, selectedLayer]);
+  // Design-control edits while a chip is active are the chip's new classes — store
+  // them as that chip's override. Non-style fields (variables, etc.) and edits on
+  // style-less layers pass straight through to the layer.
+  const handleDesignUpdate = useCallback((layerId: string, updates: Partial<Layer>) => {
+    const chip = activeStyleIdRef.current;
+    if (!chip || updates.classes === undefined) {
+      handleLayerUpdate(layerId, updates);
+      return;
+    }
+    const { classes, design, styleOverrides: _so, ...rest } = updates;
+    if (Object.keys(rest).length > 0) handleLayerUpdate(layerId, rest);
+    const str = Array.isArray(classes) ? classes.join(' ') : classes;
+    // Route background gradient/image vars from the derived design through to the
+    // chip write — they aren't in `classes`, so dropping the design here would
+    // silently discard an applied gradient/image. When design is present it is
+    // authoritative (an empty result removes the vars).
+    const bgVars = design !== undefined ? (extractBgVars(design.backgrounds) ?? {}) : undefined;
+    applyChipClasses(chip, str, bgVars);
+  }, [handleLayerUpdate, applyChipClasses]);
+
+  // Classes section sources. With a style stack, the panel is chip-scoped: it
+  // shows the active chip's effective classes. Style-less layers — and rich-text
+  // inline-style editing, which edits a text style rather than the layer stack —
+  // show their own classes (from `classesInput`) instead.
+  const styleClassesArray = showTextStyleControls ? [] : activeChipClassTokens;
+  const layerOnlyClasses =
+    showTextStyleControls || appliedStyleIds.length === 0 ? classesArray : [];
+
+  // Design controls bind to the active chip's proxy layer (and route edits to a
+  // per-chip override) unless we're editing a rich-text inline style, where the
+  // text-style path inside useDesignSync owns the update.
+  const controlLayer = showTextStyleControls ? selectedLayer : designLayer;
+  const controlUpdate = showTextStyleControls ? handleLayerUpdate : handleDesignUpdate;
 
   // Update local state when selected layer changes (for settings fields)
   const [prevSelectedLayerId, setPrevSelectedLayerId] = useState<string | null>(null);
@@ -809,17 +922,12 @@ const RightSidebar = React.memo(function RightSidebar({
   const addClass = useCallback((newClass: string) => {
     if (!newClass.trim() || !selectedLayer) return;
     const trimmedClass = newClass.trim();
-    if (classesArray.includes(trimmedClass)) return; // Don't add duplicates
 
-    // Remove any conflicting classes before adding the new one
-    const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
-
-    // Add the new class (after removing conflicts)
-    const newClasses = [...classesWithoutConflicts, trimmedClass].join(' ');
-
-    // In text edit mode with a text style selected, update the text style
-    // Initialize with DEFAULT_TEXT_STYLES if layer doesn't have textStyles yet
+    // Text edit mode with a text style selected: update the text style.
     if (showTextStyleControls && activeTextStyleKey) {
+      if (classesArray.includes(trimmedClass)) return;
+      const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
+      const newClasses = removeRedundantSpacingShorthands([...classesWithoutConflicts, trimmedClass]).join(' ');
       const parsedDesign = classesToDesign([trimmedClass]);
       const currentTextStyles = selectedLayer.textStyles ?? { ...DEFAULT_TEXT_STYLES };
       const currentTextStyle = currentTextStyles[activeTextStyleKey] || { design: {}, classes: '' };
@@ -828,27 +936,34 @@ const RightSidebar = React.memo(function RightSidebar({
       handleLayerUpdate(selectedLayer.id, {
         textStyles: {
           ...currentTextStyles,
-          [activeTextStyleKey]: {
-            ...currentTextStyle,
-            classes: newClasses,
-            design: updatedDesign,
-          },
+          [activeTextStyleKey]: { ...currentTextStyle, classes: newClasses, design: updatedDesign },
         },
       });
-    } else {
-      // Otherwise, update the layer itself
-      const parsedDesign = classesToDesign([trimmedClass]);
-      const updatedDesign = mergeDesign(selectedLayer.design, parsedDesign);
-
-      handleLayerUpdate(selectedLayer.id, {
-        classes: newClasses,
-        design: updatedDesign
-      });
+      setClassesInput(newClasses);
+      setCurrentClassInput('');
+      return;
     }
 
+    // Style stack active: add the class to the active chip's override.
+    const chip = activeLayerStyleId;
+    if (chip) {
+      if (activeChipClassTokens.includes(trimmedClass)) return;
+      const withoutConflicts = removeConflictsForClass(activeChipClassTokens, trimmedClass);
+      applyChipClasses(chip, removeRedundantSpacingShorthands([...withoutConflicts, trimmedClass]).join(' '));
+      setCurrentClassInput('');
+      return;
+    }
+
+    // Style-less layer: update the layer's own classes.
+    if (classesArray.includes(trimmedClass)) return;
+    const classesWithoutConflicts = removeConflictsForClass(classesArray, trimmedClass);
+    const newClasses = removeRedundantSpacingShorthands([...classesWithoutConflicts, trimmedClass]).join(' ');
+    const parsedDesign = classesToDesign([trimmedClass]);
+    const updatedDesign = mergeDesign(selectedLayer.design, parsedDesign);
+    handleLayerUpdate(selectedLayer.id, { classes: newClasses, design: updatedDesign });
     setClassesInput(newClasses);
     setCurrentClassInput('');
-  }, [classesArray, handleLayerUpdate, selectedLayer, showTextStyleControls, activeTextStyleKey]);
+  }, [classesArray, activeChipClassTokens, activeLayerStyleId, applyChipClasses, handleLayerUpdate, selectedLayer, showTextStyleControls, activeTextStyleKey]);
 
   // Remove class function
   const removeClass = useCallback((classToRemove: string) => {
@@ -876,62 +991,18 @@ const RightSidebar = React.memo(function RightSidebar({
     }
   }, [classesArray, handleClassesChange, selectedLayer, showTextStyleControls, activeTextStyleKey, handleLayerUpdate]);
 
-  // Remove a class that belongs to the applied style — tracks as styleOverrides
+  // Remove a class from the active chip's override (style stack active).
   const removeStyleClass = useCallback((classToRemove: string) => {
-    if (!selectedLayer) return;
-    const newClasses = classesArray.filter(cls => cls !== classToRemove).join(' ');
-    setClassesInput(newClasses);
-    handleLayerUpdate(selectedLayer.id, {
-      classes: newClasses,
-      styleOverrides: {
-        classes: newClasses,
-        design: selectedLayer.styleOverrides?.design ?? selectedLayer.design,
-      },
-    });
-  }, [classesArray, handleLayerUpdate, selectedLayer]);
+    const chip = activeStyleIdRef.current;
+    if (!selectedLayer || !chip) return;
+    applyChipClasses(chip, activeChipClassTokens.filter(cls => cls !== classToRemove).join(' '));
+  }, [selectedLayer, activeChipClassTokens, applyChipClasses]);
 
-  // Whether the style has any overrides (classes or design)
-  const styleHasOverrides = useMemo(() => {
-    if (!appliedStyle || !selectedLayer) return false;
-    return hasStyleOverrides(selectedLayer, appliedStyle);
-  }, [appliedStyle, selectedLayer]);
-
-  // Update the style definition with current layer values
-  const handleUpdateStyleFromClasses = useCallback(async () => {
-    if (!selectedLayer || !appliedStyle) return;
-    const currentClasses = classesInput;
-    const currentDesign = selectedLayer.design;
-
-    await updateStyle(appliedStyle.id, {
-      classes: currentClasses,
-      design: currentDesign,
-    });
-
-    updateStyleAcrossStores(appliedStyle.id, currentClasses, currentDesign);
-    handleLayerUpdate(selectedLayer.id, { styleOverrides: undefined });
-
-    if (liveLayerStyleUpdates) {
-      liveLayerStyleUpdates.broadcastStyleUpdate(appliedStyle.id, {
-        classes: currentClasses,
-        design: currentDesign,
-      });
-    }
-  }, [selectedLayer, appliedStyle, classesInput, updateStyle, handleLayerUpdate, liveLayerStyleUpdates]);
-
-  // Reset overrides back to the style's original classes/design
-  const handleResetStyleOverrides = useCallback(() => {
-    if (!selectedLayer || !appliedStyle) return;
-    const updatedLayer = resetLayerToStyle(selectedLayer, appliedStyle);
-    const resetClasses = Array.isArray(updatedLayer.classes)
-      ? updatedLayer.classes.join(' ')
-      : updatedLayer.classes || '';
-    setClassesInput(resetClasses);
-    handleLayerUpdate(selectedLayer.id, {
-      classes: updatedLayer.classes,
-      design: updatedLayer.design,
-      styleOverrides: undefined,
-    });
-  }, [selectedLayer, appliedStyle, handleLayerUpdate]);
+  // Copy a class into the input so it can be edited and re-added.
+  const editClass = useCallback((classToEdit: string) => {
+    setCurrentClassInput(classToEdit);
+    classInputRef.current?.focus();
+  }, []);
 
   // Handle key press for adding classes
   const handleKeyPress = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -1230,7 +1301,9 @@ const RightSidebar = React.memo(function RightSidebar({
   const getDynamicPageSourceValue = useMemo(() => {
     if (!selectedLayer) return 'none';
     const collectionVariable = getCollectionVariable(selectedLayer);
-    if (!collectionVariable?.id) return 'none';
+    if (!collectionVariable) return 'none';
+    // Treat unbound bindings (e.g. multi-asset placeholder with no field chosen) as empty
+    if (!hasBoundCollectionSource(collectionVariable)) return 'none';
 
     // If source_field_id is set, check the type
     if (collectionVariable.source_field_id) {
@@ -1402,9 +1475,11 @@ const RightSidebar = React.memo(function RightSidebar({
         children: [
           {
             id: `${collectionLayerId}-pagination-prev-text`,
-            name: 'span',
+            name: 'text',
             customName: 'Previous Text',
+            settings: { tag: 'span' },
             classes: '',
+            restrictions: { editText: true },
             variables: {
               text: {
                 type: 'dynamic_text',
@@ -1416,13 +1491,15 @@ const RightSidebar = React.memo(function RightSidebar({
       } as Layer,
       {
         id: `${collectionLayerId}-pagination-info`,
-        name: 'span',
+        name: 'text',
         customName: 'Page Info',
+        settings: { tag: 'span' },
         classes: 'text-sm text-[#4b5563]',
+        restrictions: { editText: true },
         variables: {
           text: {
-            type: 'dynamic_text',
-            data: { content: 'Page 1 of 1' }
+            type: 'dynamic_rich_text',
+            data: { content: defaultPaginationInfoDoc() }
           }
         }
       } as Layer,
@@ -1439,9 +1516,11 @@ const RightSidebar = React.memo(function RightSidebar({
         children: [
           {
             id: `${collectionLayerId}-pagination-next-text`,
-            name: 'span',
+            name: 'text',
             customName: 'Next Text',
+            settings: { tag: 'span' },
             classes: '',
+            restrictions: { editText: true },
             variables: {
               text: {
                 type: 'dynamic_text',
@@ -1478,9 +1557,11 @@ const RightSidebar = React.memo(function RightSidebar({
         children: [
           {
             id: `${collectionLayerId}-pagination-loadmore-text`,
-            name: 'span',
+            name: 'text',
             customName: 'Load More Text',
+            settings: { tag: 'span' },
             classes: '',
+            restrictions: { editText: true },
             variables: {
               text: {
                 type: 'dynamic_text',
@@ -1492,13 +1573,15 @@ const RightSidebar = React.memo(function RightSidebar({
       } as Layer,
       {
         id: `${collectionLayerId}-pagination-count`,
-        name: 'span',
+        name: 'text',
         customName: 'Items Count',
+        settings: { tag: 'span' },
         classes: 'text-sm text-[#4b5563]',
+        restrictions: { editText: true },
         variables: {
           text: {
-            type: 'dynamic_text',
-            data: { content: 'Showing items' }
+            type: 'dynamic_rich_text',
+            data: { content: defaultPaginationCountDoc() }
           }
         }
       } as Layer,
@@ -1682,8 +1765,8 @@ const RightSidebar = React.memo(function RightSidebar({
   const fieldGroups = useMemo(() => {
     if (!selectedLayerId || !allLayers.length) return undefined;
     const page = editingComponentId ? null : currentPage;
-    return buildFieldGroupsForLayer(selectedLayerId, allLayers, page, fields, collections);
-  }, [selectedLayerId, allLayers, currentPage, fields, collections, editingComponentId]);
+    return buildFieldGroupsForLayer(selectedLayerId, allLayers, page, fields, collections, globals);
+  }, [selectedLayerId, allLayers, currentPage, fields, collections, globals, editingComponentId]);
 
   // Get collection fields for the currently selected collection layer (for Sort By dropdown)
   const selectedCollectionFields = useMemo(() => {
@@ -1828,6 +1911,23 @@ const RightSidebar = React.memo(function RightSidebar({
     }
   };
 
+  // Handle editing custom attribute (supports renaming the attribute key)
+  const handleEditAttribute = (oldName: string, newName: string, newValue: string) => {
+    if (!selectedLayerId || !newName.trim()) return;
+    const currentSettings = selectedLayer?.settings || {};
+    const currentAttributes = { ...currentSettings.customAttributes };
+    if (oldName !== newName) {
+      delete currentAttributes[oldName];
+    }
+    currentAttributes[newName] = newValue;
+    handleLayerUpdate(selectedLayerId, {
+      settings: {
+        ...currentSettings,
+        customAttributes: currentAttributes
+      }
+    });
+  };
+
   if (!selectedLayerId || !selectedLayer) {
     return (
       <div className="w-64 shrink-0 bg-background border-l flex items-center justify-center h-screen">
@@ -1891,6 +1991,8 @@ const RightSidebar = React.memo(function RightSidebar({
                 pageId={currentPageId}
                 onLayerUpdate={handleLayerUpdate}
                 activeTextStyleKey={selectedLayer && isRichTextLayer(selectedLayer) ? activeTextStyleKey : null}
+                activeStyleId={activeLayerStyleId}
+                onActiveStyleChange={setActiveStyleId}
               />
             )}
 
@@ -1903,25 +2005,32 @@ const RightSidebar = React.memo(function RightSidebar({
           <div className="overflow-y-auto no-scrollbar overflow-x-hidden divide-y ">
 
           {shouldShowControl('layout', selectedLayer) && !showTextStyleControls && (
-            <LayoutControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <LayoutControls layer={controlLayer} onLayerUpdate={controlUpdate} />
+          )}
+
+          {!showTextStyleControls && (
+            <SelfLayoutControls
+              layer={controlLayer} parentLayer={selectedLayerParent}
+              onLayerUpdate={controlUpdate}
+            />
           )}
 
           {shouldShowControl('spacing', selectedLayer) && (
             <SpacingControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
             />
           )}
 
           {shouldShowControl('sizing', selectedLayer) && !showTextStyleControls && (
-            <SizingControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <SizingControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('typography', selectedLayer) && (
             <TypographyControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1931,8 +2040,8 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('backgrounds', selectedLayer) && (
             <BackgroundsControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1942,8 +2051,8 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('borders', selectedLayer) && (
             <BorderControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
               fieldGroups={fieldGroups}
               allFields={fields}
@@ -1953,22 +2062,22 @@ const RightSidebar = React.memo(function RightSidebar({
 
           {shouldShowControl('effects', selectedLayer) && (
             <EffectControls
-              layer={selectedLayer}
-              onLayerUpdate={handleLayerUpdate}
+              layer={controlLayer}
+              onLayerUpdate={controlUpdate}
               activeTextStyleKey={activeTextStyleKey}
             />
           )}
 
           {shouldShowControl('position', selectedLayer) && !showTextStyleControls && (
-            <PositionControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <PositionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('transforms', selectedLayer) && (
-            <TransformControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <TransformControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {shouldShowControl('transitions', selectedLayer) && (
-            <TransitionControls layer={selectedLayer} onLayerUpdate={handleLayerUpdate} />
+            <TransitionControls layer={controlLayer} onLayerUpdate={controlUpdate} />
           )}
 
           {/* Classes panel - shows classes for active text style or layer */}
@@ -1978,14 +2087,29 @@ const RightSidebar = React.memo(function RightSidebar({
             onToggle={() => setClassesOpen(!classesOpen)}
           >
             <div className="flex flex-col gap-3">
-              <Input
-                value={currentClassInput}
-                onChange={(e) => setCurrentClassInput(e.target.value)}
-                onKeyDown={handleKeyPress}
-                placeholder="Type class and press Enter..."
-                disabled={isLockedByOther}
-                className={isLockedByOther ? 'opacity-50 cursor-not-allowed' : ''}
-              />
+              <div className="relative">
+                <Input
+                  ref={classInputRef}
+                  value={currentClassInput}
+                  onChange={(e) => setCurrentClassInput(e.target.value)}
+                  onKeyDown={handleKeyPress}
+                  placeholder="Type class and press Enter..."
+                  disabled={isLockedByOther}
+                  className={cn('pr-8', isLockedByOther && 'opacity-50 cursor-not-allowed')}
+                />
+                {currentClassInput && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 size-6 p-0"
+                    onClick={() => setCurrentClassInput('')}
+                    disabled={isLockedByOther}
+                    aria-label="Clear class input"
+                  >
+                    <Icon name="x" className="size-3" />
+                  </Button>
+                )}
+              </div>
 
               {layerOnlyClasses.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
@@ -1996,7 +2120,15 @@ const RightSidebar = React.memo(function RightSidebar({
                       className="truncate max-w-50"
                       key={`layer-${index}`}
                     >
-                      <span className="truncate">{cls}</span>
+                      <button
+                        type="button"
+                        onClick={() => editClass(cls)}
+                        disabled={isLockedByOther}
+                        className="truncate cursor-pointer select-none disabled:cursor-not-allowed"
+                        title="Edit class"
+                      >
+                        {cls}
+                      </button>
                       <Button
                         onClick={() => removeClass(cls)}
                         className="size-4! p-0! -mr-1"
@@ -2010,42 +2142,43 @@ const RightSidebar = React.memo(function RightSidebar({
                 </div>
               )}
 
-              {/* Layer style classes (removable, strikethrough if overridden) */}
+              {/* Active chip's classes (the style currently selected above) */}
               {styleClassesArray.length > 0 && (
                 <div className="flex flex-col gap-2.5">
                   <div className="py-1 w-full flex items-center gap-2">
                     <Separator className="flex-1" />
                     <div className="text-xs text-muted-foreground">
-                      <span className="font-semibold">{appliedStyle?.name}</span> classes
+                      <span className="font-semibold">{activeChipStyle?.name}</span> classes
                     </div>
                     <Separator className="flex-1" />
                   </div>
 
                   <div className="flex flex-wrap gap-1.5">
-                    {styleClassesArray.map((cls, index) => {
-                      const isOverridden = overriddenStyleClasses.has(cls);
-                      return (
-                        <Badge
-                          variant="secondary"
-                          key={`style-${index}`}
-                          className="opacity-60 truncate max-w-50"
+                    {styleClassesArray.map((cls, index) => (
+                      <Badge
+                        variant="secondary"
+                        key={`style-${index}`}
+                        className="truncate max-w-50"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => editClass(cls)}
+                          disabled={isLockedByOther}
+                          className="truncate cursor-pointer select-none disabled:cursor-not-allowed"
+                          title="Edit class"
                         >
-                          <span className={isOverridden ? 'line-through truncate' : 'truncate'}>
-                            {cls}
-                          </span>
-                          {!isOverridden && (
-                            <Button
-                              onClick={() => removeStyleClass(cls)}
-                              className="size-4! p-0! -mr-1"
-                              variant="outline"
-                              disabled={isLockedByOther}
-                            >
-                              <Icon name="x" className="size-2" />
-                            </Button>
-                          )}
-                        </Badge>
-                      );
-                    })}
+                          {cls}
+                        </button>
+                        <Button
+                          onClick={() => removeStyleClass(cls)}
+                          className="size-4! p-0! -mr-1"
+                          variant="outline"
+                          disabled={isLockedByOther}
+                        >
+                          <Icon name="x" className="size-2" />
+                        </Button>
+                      </Badge>
+                    ))}
                   </div>
                 </div>
               )}
@@ -2334,6 +2467,7 @@ const RightSidebar = React.memo(function RightSidebar({
                           fieldGroups={fieldGroups}
                           allFields={fields}
                           collections={collections}
+                          layer={selectedLayer}
                           allowedFieldTypes={SIMPLE_TEXT_FIELD_TYPES}
                         />
                       ) : (
@@ -2459,10 +2593,10 @@ const RightSidebar = React.memo(function RightSidebar({
                             <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {parentReferenceFields.length > 0 && (
+                            {parentMultiAssetFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Reference fields</SelectLabel>
-                                {parentReferenceFields.map((field) => (
+                                <SelectLabel>Multi-asset fields</SelectLabel>
+                                {parentMultiAssetFields.map((field) => (
                                   <SelectItem key={field.id} value={field.id}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
@@ -2472,10 +2606,10 @@ const RightSidebar = React.memo(function RightSidebar({
                                 ))}
                               </SelectGroup>
                             )}
-                            {parentMultiAssetFields.length > 0 && (
+                            {parentReferenceFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Multi-asset fields</SelectLabel>
-                                {parentMultiAssetFields.map((field) => (
+                                <SelectLabel>Reference fields</SelectLabel>
+                                {parentReferenceFields.map((field) => (
                                   <SelectItem key={field.id} value={field.id}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
@@ -2517,11 +2651,11 @@ const RightSidebar = React.memo(function RightSidebar({
                             <SelectValue placeholder="Select..." />
                           </SelectTrigger>
                           <SelectContent>
-                            {dynamicPageReferenceFields.length > 0 && (
+                            {dynamicPageMultiAssetFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Reference fields</SelectLabel>
-                                {dynamicPageReferenceFields.map((field) => (
-                                  <SelectItem key={field.id} value={`field:${field.id}`}>
+                                <SelectLabel>Multi-asset fields</SelectLabel>
+                                {dynamicPageMultiAssetFields.map((field) => (
+                                  <SelectItem key={field.id} value={`multi_asset:${field.id}`}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
                                       {field.name}
@@ -2530,11 +2664,11 @@ const RightSidebar = React.memo(function RightSidebar({
                                 ))}
                               </SelectGroup>
                             )}
-                            {dynamicPageMultiAssetFields.length > 0 && (
+                            {dynamicPageReferenceFields.length > 0 && (
                               <SelectGroup>
-                                <SelectLabel>Multi-asset fields</SelectLabel>
-                                {dynamicPageMultiAssetFields.map((field) => (
-                                  <SelectItem key={field.id} value={`multi_asset:${field.id}`}>
+                                <SelectLabel>Reference fields</SelectLabel>
+                                {dynamicPageReferenceFields.map((field) => (
+                                  <SelectItem key={field.id} value={`field:${field.id}`}>
                                     <span className="flex items-center gap-2">
                                       <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
                                       {field.name}
@@ -2581,11 +2715,11 @@ const RightSidebar = React.memo(function RightSidebar({
                       ) : (
                         /* When not inside a parent collection and not dynamic, show collections as source options */
                         <Select
-                          value={getCollectionVariable(selectedLayer)?.id || ''}
+                          value={hasBoundCollectionSource(getCollectionVariable(selectedLayer)) ? getCollectionVariable(selectedLayer)?.id || '' : ''}
                           onValueChange={handleCollectionChange}
                         >
                           <SelectTrigger
-                            onClear={getCollectionVariable(selectedLayer)?.id
+                            onClear={hasBoundCollectionSource(getCollectionVariable(selectedLayer))
                               ? () => handleCollectionChange('none')
                               : undefined}
                           >
@@ -2615,9 +2749,13 @@ const RightSidebar = React.memo(function RightSidebar({
                     </div>
                   </div>
 
-                  {/* Sort By - only show if collection is selected */}
-                  {getCollectionVariable(selectedLayer)?.id && (
+                  {/* Sort By - only show if a real collection source is selected */}
+                  {hasBoundCollectionSource(getCollectionVariable(selectedLayer)) && (
                     <>
+                      {/* Sort by/order are hidden for multi-asset: order is the
+                          image order in the field and there are no fields to sort by. */}
+                      {getCollectionVariable(selectedLayer)?.source_field_type !== 'multi_asset' && (
+                      <>
                       <div className="grid grid-cols-3">
                         <Label variant="muted">Sort by</Label>
                         <div className="col-span-2 *:w-full flex">
@@ -2654,19 +2792,22 @@ const RightSidebar = React.memo(function RightSidebar({
                                   <SelectItem value="random">Random</SelectItem>
                                   <SelectItem value={SORT_INPUT_VALUE_OPTION}>Input value</SelectItem>
                                 </SelectGroup>
-                                <SelectSeparator />
-                                <SelectGroup>
-                                  <SelectLabel>Fields</SelectLabel>
-                                  {selectedCollectionFields.length > 0 &&
-                                    selectedCollectionFields.map((field) => (
-                                      <SelectItem key={field.id} value={field.id}>
-                                        <span className="flex items-center gap-2">
-                                          <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
-                                          {field.name}
-                                        </span>
-                                      </SelectItem>
-                                    ))}
-                                </SelectGroup>
+                                {selectedCollectionFields.length > 0 && (
+                                  <>
+                                    <SelectSeparator />
+                                    <SelectGroup>
+                                      <SelectLabel>Fields</SelectLabel>
+                                      {selectedCollectionFields.map((field) => (
+                                        <SelectItem key={field.id} value={field.id}>
+                                          <span className="flex items-center gap-2">
+                                            <Icon name={getFieldIcon(field.type)} className="size-3 text-muted-foreground shrink-0" />
+                                            {field.name}
+                                          </span>
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </>
+                                )}
                               </SelectContent>
                             </Select>
                           )}
@@ -2722,6 +2863,8 @@ const RightSidebar = React.memo(function RightSidebar({
                             </div>
                           </div>
                       )}
+                      </>
+                      )}
 
                       {/* Total Limit */}
                       <div className="grid grid-cols-3">
@@ -2751,8 +2894,8 @@ const RightSidebar = React.memo(function RightSidebar({
                         </div>
                       </div>
 
-                      {/* Pagination - hidden for nested collections */}
-                      {!isNestedInCollection && (
+                      {/* Pagination - hidden for nested collections and slides */}
+                      {!isNestedInCollection && selectedLayer.name !== 'slide' && (
                         <div className="grid grid-cols-3">
                           <Label variant="muted">Pagination</Label>
                           <div className="col-span-2 *:w-full">
@@ -2775,7 +2918,7 @@ const RightSidebar = React.memo(function RightSidebar({
                       )}
 
                       {/* Pagination type and items per page - only show when pagination enabled */}
-                      {!isNestedInCollection && getCollectionVariable(selectedLayer)?.pagination?.enabled && (
+                      {!isNestedInCollection && selectedLayer.name !== 'slide' && getCollectionVariable(selectedLayer)?.pagination?.enabled && (
                         <>
                           <div className="grid grid-cols-3">
                             <Label variant="muted">Type</Label>
@@ -2906,8 +3049,8 @@ const RightSidebar = React.memo(function RightSidebar({
               onLayerUpdate={handleLayerUpdate}
             />
 
-            {/* Collection Filters - only for collection layers */}
-            {selectedLayer && getCollectionVariable(selectedLayer)?.id && (
+            {/* Collection Filters - only for layers bound to a real collection source */}
+            {selectedLayer && hasBoundCollectionSource(getCollectionVariable(selectedLayer)) && (
               <CollectionFiltersSettings
                 layer={selectedLayer}
                 onLayerUpdate={handleLayerUpdate}
@@ -2989,20 +3132,13 @@ const RightSidebar = React.memo(function RightSidebar({
               {selectedLayer?.settings?.customAttributes && (
                 <div className="flex flex-col gap-1">
                   {Object.entries(selectedLayer.settings.customAttributes).map(([name, value]) => (
-                    <div
+                    <CustomAttributeRow
                       key={name}
-                      className="flex items-center justify-between pl-3 pr-1 h-8 bg-muted text-muted-foreground rounded-lg"
-                    >
-                      <span>{name}=&quot;{value as string}&quot;</span>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        className="p-0.5 rounded-sm opacity-70 hover:opacity-100 transition-opacity cursor-pointer"
-                        onClick={() => handleRemoveAttribute(name)}
-                      >
-                        <Icon name="x" className="size-2.5" />
-                      </span>
-                    </div>
+                      name={name}
+                      value={value as string}
+                      onEdit={handleEditAttribute}
+                      onRemove={handleRemoveAttribute}
+                    />
                   ))}
                 </div>
               )}

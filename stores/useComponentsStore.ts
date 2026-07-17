@@ -16,7 +16,7 @@ import {
 import { detachStyleFromLayers, updateLayersWithStyle } from '@/lib/layer-style-utils';
 import { scheduleIdle } from '@/lib/schedule-idle';
 import { generateId } from '@/lib/utils';
-import type { Component, ComponentVariant, Layer } from '@/types';
+import type { Component, ComponentVariant, Layer, LayerStyle } from '@/types';
 
 /**
  * Per-component, per-variant working copy of layers used while editing a
@@ -203,8 +203,8 @@ interface ComponentsActions {
   deleteTextVariable: (componentId: string, variableId: string) => Promise<void>;
 
   // Layer style operations
-  updateStyleOnLayers: (styleId: string, newClasses: string, newDesign?: Layer['design']) => void;
-  detachStyleFromAllLayers: (styleId: string) => void;
+  updateStyleOnLayers: (styleId: string, stylesById: Map<string, LayerStyle>) => void;
+  detachStyleFromAllLayers: (styleId: string, stylesById?: Map<string, LayerStyle>) => void;
 
   // State management
   setError: (error: string | null) => void;
@@ -528,14 +528,17 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
         for (const variant of variants) {
           variantDrafts[variant.id] = JSON.parse(JSON.stringify(variant.layers ?? []));
         }
-        // Layers used for version tracking — track the primary variant for now.
-        const primaryLayers = variantDrafts[variants[0].id] ?? [];
 
-        // Mark entity as initializing BEFORE updating store to prevent false change detection
+        // Mark each variant as initializing BEFORE updating store to prevent
+        // false change detection. Undo/redo is scoped per variant.
         try {
           const { markEntityInitializing, updatePreviousState } = await import('@/hooks/use-undo-redo');
-          markEntityInitializing('component', componentId);
-          updatePreviousState('component', componentId, primaryLayers);
+          const { componentVersionEntityId } = await import('@/lib/version-tracking');
+          for (const variant of variants) {
+            const versionId = componentVersionEntityId(componentId, variant.id);
+            markEntityInitializing('component', versionId);
+            updatePreviousState('component', versionId, variantDrafts[variant.id]);
+          }
         } catch (err) {
           console.error('Failed to mark component as initializing:', err);
         }
@@ -551,9 +554,15 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
           },
         }));
 
-        // Initialize version tracking with loaded state
-        import('@/lib/version-tracking').then(({ initializeVersionTracking }) => {
-          initializeVersionTracking('component', componentId, primaryLayers);
+        // Initialize version tracking with loaded state (per variant)
+        import('@/lib/version-tracking').then(({ initializeVersionTracking, componentVersionEntityId }) => {
+          for (const variant of variants) {
+            initializeVersionTracking(
+              'component',
+              componentVersionEntityId(componentId, variant.id),
+              variantDrafts[variant.id]
+            );
+          }
         }).catch((err) => {
           console.error('Failed to initialize component version tracking:', err);
         });
@@ -673,9 +682,17 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
             isSaving: false,
           }));
 
-          // Record version for undo/redo only if variants match what we saved.
-          import('@/lib/version-tracking').then(({ recordVersionViaApi }) => {
-            recordVersionViaApi('component', componentId, layersBeingSaved);
+          // Record a version per variant for undo/redo. Each variant has its
+          // own history; unchanged variants produce an empty patch and are
+          // skipped inside recordVersionViaApi.
+          import('@/lib/version-tracking').then(({ recordVersionViaApi, componentVersionEntityId }) => {
+            for (const variant of variantsBeingSaved) {
+              recordVersionViaApi(
+                'component',
+                componentVersionEntityId(componentId, variant.id),
+                variant.layers
+              );
+            }
           }).catch((err) => {
             console.error('Failed to record component version:', err);
           });
@@ -706,12 +723,19 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
         scheduleIdle(async () => {
           try {
             const { usePagesStore } = await import('./usePagesStore');
-            const { containsComponent } = await import('@/lib/component-utils');
+            const { collectComponentIds } = await import('@/lib/component-utils');
+
+            // `collectComponentIds` (unlike `containsComponent`) also finds
+            // components embedded inside rich-text content and override text
+            // values, so a page that uses this component only inside a Rich
+            // Text block is still flagged for per-page CSS regeneration.
+            const referencesComponent = (layers: Layer[]) =>
+              collectComponentIds(layers).has(componentId);
 
             const allDrafts = usePagesStore.getState().draftsByPageId;
             const affectedPageIds: string[] = [];
             Object.entries(allDrafts).forEach(([pid, pageDraft]) => {
-              if (pageDraft.layers && containsComponent(pageDraft.layers, componentId)) {
+              if (pageDraft.layers && referencesComponent(pageDraft.layers)) {
                 affectedPageIds.push(pid);
               }
             });
@@ -730,7 +754,7 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
             const { generateAndSaveCSS } = await import('@/lib/client/cssGenerator');
             const allLayers: Layer[] = variantsBeingSaved.flatMap(v => v.layers);
             Object.values(allDrafts).forEach((pageDraft) => {
-              if (pageDraft.layers && containsComponent(pageDraft.layers, componentId)) {
+              if (pageDraft.layers && referencesComponent(pageDraft.layers)) {
                 allLayers.push(...pageDraft.layers);
               }
             });
@@ -768,9 +792,36 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
       });
     },
 
-    // Rename a component (convenience method)
+    // Rename a component with optimistic update (rolls back on failure)
     renameComponent: async (id, newName) => {
-      await get().updateComponent(id, { name: newName });
+      const previousName = get().components.find((c) => c.id === id)?.name;
+
+      set((state) => ({
+        components: state.components.map((c) => (c.id === id ? { ...c, name: newName } : c)),
+      }));
+
+      try {
+        const response = await fetch(`/ycode/api/components/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+
+        const result = await response.json();
+        if (result.error) throw new Error(result.error);
+
+        set((state) => ({
+          components: state.components.map((c) => (c.id === id ? result.data : c)),
+        }));
+      } catch (error) {
+        console.error('Failed to rename component:', error);
+        if (previousName !== undefined) {
+          set((state) => ({
+            components: state.components.map((c) => (c.id === id ? { ...c, name: previousName } : c)),
+            error: 'Failed to rename component',
+          }));
+        }
+      }
     },
 
     // Get component by ID (convenience method)
@@ -1611,16 +1662,16 @@ export const useComponentsStore = create<ComponentsStore>((set, get) => {
      * Update all layers using a specific style across all components
      * Used when a style is updated
      */
-    updateStyleOnLayers: (styleId, newClasses, newDesign) => {
-      updateComponentLayers((layers) => updateLayersWithStyle(layers, styleId, newClasses, newDesign));
+    updateStyleOnLayers: (styleId, stylesById) => {
+      updateComponentLayers((layers) => updateLayersWithStyle(layers, styleId, stylesById));
     },
 
     /**
      * Detach a style from all layers across all components
      * Used when a style is deleted
      */
-    detachStyleFromAllLayers: (styleId) => {
-      updateComponentLayers((layers) => detachStyleFromLayers(layers, styleId));
+    detachStyleFromAllLayers: (styleId, stylesById) => {
+      updateComponentLayers((layers) => detachStyleFromLayers(layers, styleId, stylesById));
     },
 
     // Error management

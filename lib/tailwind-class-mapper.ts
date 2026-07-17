@@ -191,8 +191,8 @@ function formatMeasurementClass(
     return `${prefix}-[${value}]`;
   }
 
-  // For values starting with a digit but not caught above
-  if (value.match(/^\d/)) {
+  // For values starting with a digit or leading decimal point (e.g. ".875rem")
+  if (value.match(/^\.?\d/)) {
     return `${prefix}-[${value}]`;
   }
 
@@ -240,6 +240,14 @@ function ensureLengthUnit(value: string): string {
 }
 
 /**
+ * Normalizes a grid span value to a bare Tailwind suffix.
+ * Accepts CSS-native shorthand ("span 3") as well as bare values ("3", "full", "auto").
+ */
+function normalizeGridSpanValue(value: string): string {
+  return value.replace(/^span\s+/i, '').trim();
+}
+
+/**
  * Map of Tailwind class prefixes to their property names
  * Used for conflict detection and removal
  */
@@ -250,6 +258,7 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   flexWrap: /^flex-(wrap|wrap-reverse|nowrap)$/,
   justifyContent: /^justify-(start|end|center|between|around|evenly|stretch)$/,
   alignItems: /^items-(start|end|center|baseline|stretch)$/,
+  alignSelf: /^self-(auto|start|end|center|baseline|stretch)$/,
   alignContent: /^content-(start|end|center|between|around|evenly|stretch)$/,
   gap: /^gap-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   columnGap: /^gap-x-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
@@ -259,26 +268,34 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
 
   // Spacing
   padding: /^p-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
+  paddingX: /^px-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
+  paddingY: /^py-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   paddingTop: /^pt-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   paddingRight: /^pr-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   paddingBottom: /^pb-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   paddingLeft: /^pl-(\[.+\]|\d+|px|0\.5|1\.5|2\.5|3\.5)$/,
   margin: /^m-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
+  marginX: /^mx-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
+  marginY: /^my-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
   marginTop: /^mt-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
   marginRight: /^mr-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
   marginBottom: /^mb-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
   marginLeft: /^ml-(\[.+\]|\d+|px|auto|0\.5|1\.5|2\.5|3\.5)$/,
 
   // Sizing
-  width: /^w-(\[.+\]|\d+\/\d+|\d+|px|auto|full|screen|min|max|fit)$/,
-  height: /^h-(\[.+\]|\d+\/\d+|\d+|px|auto|full|screen|min|max|fit)$/,
-  minWidth: /^min-w-(\[.+\]|\d+|px|full|min|max|fit)$/,
-  minHeight: /^min-h-(\[.+\]|\d+|px|full|screen|min|max|fit)$/,
-  maxWidth: /^max-w-(\[.+\]|none|xs|sm|md|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|full|min|max|fit|prose|screen-sm|screen-md|screen-lg|screen-xl|screen-2xl)$/,
-  maxHeight: /^max-h-(\[.+\]|\d+|px|full|screen|min|max|fit)$/,
-  overflow: /^overflow-(visible|hidden|clip|scroll|auto|x-visible|x-hidden|x-clip|x-scroll|x-auto|y-visible|y-hidden|y-clip|y-scroll|y-auto)$/,
+  // Match any value after the prefix (including partial keywords typed live,
+  // e.g. h-a, h-au, h-aut) so in-progress classes are replaced instead of
+  // accumulating. Each prefix is exclusive to its property in Tailwind.
+  width: /^w-.+$/,
+  height: /^h-.+$/,
+  minWidth: /^min-w-.+$/,
+  minHeight: /^min-h-.+$/,
+  maxWidth: /^max-w-.+$/,
+  maxHeight: /^max-h-.+$/,
+  overflow: /^(truncate|overflow-(visible|hidden|clip|scroll|auto|x-visible|x-hidden|x-clip|x-scroll|x-auto|y-visible|y-hidden|y-clip|y-scroll|y-auto))$/,
   aspectRatio: /^aspect-(\[.+\]|auto|square|video)$/,
   objectFit: /^object-(contain|cover|fill|none|scale-down)$/,
+  objectPosition: /^object-(left-top|right-top|left-bottom|right-bottom|top|bottom|left|right|center|\[.+\])$/,
   gridColumnSpan: /^col-span-(1|2|3|4|5|6|7|8|9|10|11|12|auto|full)$/,
   gridRowSpan: /^row-span-(1|2|3|4|5|6|7|8|9|10|11|12|auto|full)$/,
 
@@ -342,6 +359,7 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   boxShadow: /^shadow(-none|-sm|-md|-lg|-xl|-2xl|-inner|-\[.+\])?$/,
   blur: /^blur(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-\[.+\])?$/,
   backdropBlur: /^backdrop-blur(-none|-sm|-md|-lg|-xl|-2xl|-3xl|-\[.+\])?$/,
+  mixBlendMode: /^mix-blend-(normal|multiply|screen|overlay|darken|lighten|color-dodge|color-burn|hard-light|soft-light|difference|exclusion|hue|saturation|color|luminosity)$/,
 
   // Positioning
   position: /^(static|fixed|absolute|relative|sticky)$/,
@@ -366,6 +384,113 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   easing: /^ease-(linear|in|out|in-out)$/,
   delay: /^delay-(\[.+\]|\d+)$/,
 };
+
+/**
+ * Spacing shorthands and the properties they override. Adding a shorthand
+ * clears conflicting classes lower in the hierarchy: full (p-/m-) overrides
+ * both axes and all sides; an axis (px-/py-/mx-/my-) overrides its two sides.
+ */
+const SPACING_OVERRIDES: Record<string, string[]> = {
+  padding: ['paddingX', 'paddingY', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft'],
+  margin: ['marginX', 'marginY', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft'],
+  paddingX: ['paddingLeft', 'paddingRight'],
+  paddingY: ['paddingTop', 'paddingBottom'],
+  marginX: ['marginLeft', 'marginRight'],
+  marginY: ['marginTop', 'marginBottom'],
+};
+
+/**
+ * Per-side spacing inputs fall back through more general shorthands so the UI
+ * reflects axis/full classes (e.g. paddingTop reads py-* then p-* when no pt-*).
+ */
+const SPACING_SIDE_FALLBACKS: Record<string, string[]> = {
+  paddingTop: ['paddingY', 'padding'],
+  paddingBottom: ['paddingY', 'padding'],
+  paddingLeft: ['paddingX', 'padding'],
+  paddingRight: ['paddingX', 'padding'],
+  marginTop: ['marginY', 'margin'],
+  marginBottom: ['marginY', 'margin'],
+  marginLeft: ['marginX', 'margin'],
+  marginRight: ['marginX', 'margin'],
+};
+
+/**
+ * For each spacing shorthand, the sides it controls. A shorthand is redundant
+ * once every side it controls is covered by a more specific class (full p-/m-
+ * may be covered by an axis, an axis only by its sides).
+ */
+const SPACING_SHORTHAND_CONTROLS: Record<string, string[]> = {
+  paddingX: ['paddingLeft', 'paddingRight'],
+  paddingY: ['paddingTop', 'paddingBottom'],
+  padding: ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft'],
+  marginX: ['marginLeft', 'marginRight'],
+  marginY: ['marginTop', 'marginBottom'],
+  margin: ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'],
+};
+
+/** Maps a spacing side property to the axis shorthand that covers it. */
+const SPACING_SIDE_AXIS: Record<string, string> = {
+  paddingTop: 'paddingY',
+  paddingBottom: 'paddingY',
+  paddingLeft: 'paddingX',
+  paddingRight: 'paddingX',
+  marginTop: 'marginY',
+  marginBottom: 'marginY',
+  marginLeft: 'marginX',
+  marginRight: 'marginX',
+};
+
+/** Full shorthands that can be covered by axis classes (not just sides). */
+const SPACING_FULL_SHORTHANDS = new Set(['padding', 'margin']);
+
+/** All spacing property names, used to gate redundancy cleanup. */
+const SPACING_PROPERTY_NAMES = new Set([
+  ...Object.keys(SPACING_SHORTHAND_CONTROLS),
+  ...Object.keys(SPACING_SIDE_AXIS),
+]);
+
+/**
+ * Identify which spacing property a prefix-stripped class matches, if any.
+ */
+function getSpacingProperty(baseClass: string): string | null {
+  for (const property of SPACING_PROPERTY_NAMES) {
+    if (CLASS_PROPERTY_MAP[property].test(baseClass)) return property;
+  }
+  return null;
+}
+
+/**
+ * Remove spacing shorthands fully overridden by more specific classes (e.g.
+ * px-* once both pl-* and pr-* are set, or p-* once every side/axis is covered).
+ * Scoped per breakpoint + UI state so responsive/state values stay independent.
+ */
+export function removeRedundantSpacingShorthands(classes: string[]): string[] {
+  // "breakpoint|uiState" → spacing properties explicitly present in that group
+  const presentByGroup = new Map<string, Set<string>>();
+  classes.forEach((cls) => {
+    const { breakpoint, uiState, baseClass } = parseFullClass(cls);
+    const property = getSpacingProperty(baseClass);
+    if (!property) return;
+    const key = `${breakpoint}|${uiState}`;
+    if (!presentByGroup.has(key)) presentByGroup.set(key, new Set());
+    presentByGroup.get(key)!.add(property);
+  });
+
+  const isRedundant = (shorthand: string, present: Set<string>): boolean => {
+    const allowAxisCoverage = SPACING_FULL_SHORTHANDS.has(shorthand);
+    return SPACING_SHORTHAND_CONTROLS[shorthand].every(
+      (side) => present.has(side) || (allowAxisCoverage && present.has(SPACING_SIDE_AXIS[side]))
+    );
+  };
+
+  return classes.filter((cls) => {
+    const { breakpoint, uiState, baseClass } = parseFullClass(cls);
+    const property = getSpacingProperty(baseClass);
+    if (!property || !SPACING_SHORTHAND_CONTROLS[property]) return true;
+    const present = presentByGroup.get(`${breakpoint}|${uiState}`);
+    return present ? !isRedundant(property, present) : true;
+  });
+}
 
 /**
  * Get the conflicting class pattern for a given property
@@ -452,6 +577,19 @@ export function removeConflictingClasses(
         if (property === 'color' && !isColor) {
           return true; // Keep this class, it's a size not a color
         }
+      }
+    }
+
+    // Special handling for font-[...] arbitrary values
+    // Distinguish fontWeight (numeric, e.g. font-[700]) from fontFamily
+    // (non-numeric, e.g. font-[Gelasio_Regular]) — both match each other's
+    // pattern via \[.+\], so keep the mismatched one instead of removing it.
+    if (baseClass.startsWith('font-[')) {
+      const value = extractArbitraryValue(baseClass);
+      if (value) {
+        const isNumeric = /^\d/.test(value);
+        if (property === 'fontWeight' && !isNumeric) return true;
+        if (property === 'fontFamily' && isNumeric) return true;
       }
     }
 
@@ -587,6 +725,13 @@ export function propertyToClass(
         };
         return `items-${itemsMap[value] || value}`;
       }
+      case 'alignSelf': {
+        const selfMap: Record<string, string> = {
+          'flex-start': 'start',
+          'flex-end': 'end',
+        };
+        return `self-${selfMap[value] || value}`;
+      }
       case 'alignContent': {
         const contentMap: Record<string, string> = {
           'flex-start': 'start',
@@ -626,10 +771,10 @@ export function propertyToClass(
         // Google/custom fonts: replace spaces with underscores for Tailwind arbitrary values
         return `font-[${value.replace(/\s+/g, '_')}]`;
       case 'lineHeight':
-        return value.match(/^\d/) ? `leading-[${value}]` : `leading-${value}`;
+        return value.match(/^\.?\d/) ? `leading-[${value}]` : `leading-${value}`;
       case 'letterSpacing':
-        // Check if value starts with digit/minus and doesn't already have a unit
-        if (value.match(/^-?\d/)) {
+        // Check if value starts with digit/minus/decimal and doesn't already have a unit
+        if (value.match(/^-?\.?\d/)) {
           // Check if value already has a unit (ends with letters or %)
           const hasUnit = /[a-z%]$/i.test(value);
           return hasUnit ? `tracking-[${value}]` : `tracking-[${value}em]`;
@@ -752,6 +897,7 @@ export function propertyToClass(
 
     // Overflow
     if (property === 'overflow') {
+      if (value === 'ellipsis') return 'truncate'; // overflow-hidden + text-ellipsis + whitespace-nowrap
       return `overflow-${value}`; // overflow-visible, overflow-hidden, overflow-scroll, overflow-auto
     }
 
@@ -766,14 +912,21 @@ export function propertyToClass(
       return `object-${value}`;
     }
 
+    // Object Position
+    if (property === 'objectPosition') {
+      return `object-${value}`;
+    }
+
     // Grid Column Span
     if (property === 'gridColumnSpan') {
-      return value === 'full' ? 'col-span-full' : `col-span-${value}`;
+      const span = normalizeGridSpanValue(value);
+      return span === 'full' ? 'col-span-full' : `col-span-${span}`;
     }
 
     // Grid Row Span
     if (property === 'gridRowSpan') {
-      return value === 'full' ? 'row-span-full' : `row-span-${value}`;
+      const span = normalizeGridSpanValue(value);
+      return span === 'full' ? 'row-span-full' : `row-span-${span}`;
     }
   }
 
@@ -933,6 +1086,9 @@ export function propertyToClass(
           return `backdrop-blur-${value}`;
         }
         return `backdrop-blur-[${value}]`;
+      case 'mixBlendMode':
+        if (value === 'normal') return '';
+        return `mix-blend-${value}`;
     }
   }
 
@@ -1102,6 +1258,19 @@ export function getAffectedProperties(className: string): string[] {
     }
   }
 
+  // Special handling for font-[...] arbitrary values
+  // Must distinguish between fontWeight (numeric, e.g. font-[700]) and
+  // fontFamily (non-numeric, e.g. font-[Gelasio_Regular]). Both share the
+  // font-[…] namespace, so without this an arbitrary weight would be treated
+  // as a family (and vice versa) and strip its sibling typography class.
+  if (baseClass.startsWith('font-[')) {
+    const value = extractArbitraryValue(baseClass);
+    if (value) {
+      properties.push(/^\d/.test(value) ? 'fontWeight' : 'fontFamily');
+      return properties;
+    }
+  }
+
   // Background-image CSS variable classes are always backgroundImage
   if (BG_IMG_VAR_RE.test(baseClass)) {
     properties.push('backgroundImage');
@@ -1164,6 +1333,12 @@ export function removeConflictsForClass(
   // Remove conflicts for each affected property
   affectedProperties.forEach(property => {
     result = removeConflictingClasses(result, property);
+
+    // A spacing shorthand also overrides more specific classes, so clear those
+    // too (e.g. p-[10px] removes px-/py-/pt-/pr-/pb-/pl-; px-[10px] removes pl-/pr-).
+    SPACING_OVERRIDES[property]?.forEach(overridden => {
+      result = removeConflictingClasses(result, overridden);
+    });
   });
 
   // Additional check: if newClass is a standard color class (e.g., text-blue-500),
@@ -1223,11 +1398,13 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     cls.startsWith('bg-[') && extractArbitraryValue(cls)?.includes('gradient(')
   );
 
-  // If we have all the gradient text indicators, extract the gradient and store as text color
+  // If we have all the gradient text indicators, extract the gradient and store as text color.
+  // Arbitrary Tailwind values encode spaces as underscores (e.g. "#605dba_20%"), so restore
+  // them — an un-decoded gradient is invalid CSS and the text-transparent fill renders blank.
   if (hasBgClipText && hasTextTransparent && gradientBgClass) {
     const gradientValue = extractArbitraryValue(gradientBgClass);
     if (gradientValue) {
-      design.typography!.color = gradientValue;
+      design.typography!.color = gradientValue.replace(/_/g, ' ');
     }
   }
 
@@ -1279,6 +1456,14 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
       const value = cls.replace('items-', '');
       if (['start', 'end', 'center', 'baseline', 'stretch'].includes(value)) {
         design.layout!.alignItems = value;
+      }
+    }
+
+    // Align Self
+    if (cls.startsWith('self-')) {
+      const value = cls.replace('self-', '');
+      if (['auto', 'start', 'end', 'center', 'baseline', 'stretch'].includes(value)) {
+        design.layout!.alignSelf = value;
       }
     }
 
@@ -1543,9 +1728,14 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
 
     // Object Fit
     if (cls.startsWith('object-')) {
-      const match = cls.match(/^object-(contain|cover|fill|none|scale-down)$/);
-      if (match) {
-        design.sizing!.objectFit = match[1];
+      const fitMatch = cls.match(/^object-(contain|cover|fill|none|scale-down)$/);
+      if (fitMatch) {
+        design.sizing!.objectFit = fitMatch[1];
+      }
+      // Object Position (disjoint value set from object-fit)
+      const positionMatch = cls.match(/^object-(left-top|right-top|left-bottom|right-bottom|top|bottom|left|right|center|\[.+\])$/);
+      if (positionMatch) {
+        design.sizing!.objectPosition = positionMatch[1];
       }
     }
 
@@ -1566,7 +1756,9 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     }
 
     // Overflow
-    if (cls.startsWith('overflow-')) {
+    if (cls === 'truncate') {
+      design.sizing!.overflow = 'ellipsis';
+    } else if (cls.startsWith('overflow-')) {
       const match = cls.match(/^overflow-(visible|hidden|clip|scroll|auto|x-visible|x-hidden|x-clip|x-scroll|x-auto|y-visible|y-hidden|y-clip|y-scroll|y-auto)$/);
       if (match) {
         design.sizing!.overflow = match[1];
@@ -1719,6 +1911,12 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     } else if (cls.match(/^backdrop-blur-(sm|md|lg|xl|2xl|3xl)$/)) {
       const match = cls.match(/^backdrop-blur-(.+)$/);
       if (match) design.effects!.backdropBlur = match[1];
+    }
+
+    // Mix Blend Mode
+    if (cls.startsWith('mix-blend-')) {
+      const match = cls.match(/^mix-blend-(.+)$/);
+      if (match) design.effects!.mixBlendMode = match[1];
     }
 
     // ===== POSITIONING =====
@@ -2218,6 +2416,16 @@ export function getInheritedValue(
     }
   }
 
+  // Per-side spacing inputs fall back through axis then full shorthands (e.g.
+  // paddingTop reads py-* then p-* when no pt-* class exists), so the spacing
+  // UI reflects px-/py-/p- and mx-/my-/m- classes.
+  if (lastValue === null) {
+    for (const fallback of SPACING_SIDE_FALLBACKS[property] ?? []) {
+      const inherited = getInheritedValue(classes, fallback, currentBreakpoint, currentUIState);
+      if (inherited.value !== null) return inherited;
+    }
+  }
+
   return { value: lastValue, source: lastSource };
 }
 
@@ -2299,6 +2507,12 @@ export function setBreakpointClass(
     classesToAdd.forEach(cls => {
       newClasses.push(fullPrefix + cls);
     });
+  }
+
+  // Setting a spacing side/axis can make a broader shorthand redundant
+  // (e.g. setting both pl-* and pr-* removes px-*), so clean those up.
+  if (SPACING_PROPERTY_NAMES.has(property)) {
+    return removeRedundantSpacingShorthands(newClasses);
   }
 
   return newClasses;

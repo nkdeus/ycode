@@ -13,6 +13,8 @@ import type {
   CollectionField,
   CollectionFieldType,
   CollectionItemWithValues,
+  CollectionVariable,
+  GlobalVariable,
   Layer,
   VisibilityOperator,
 } from '@/types';
@@ -275,36 +277,97 @@ export function isDatePreset(value: string | undefined): boolean {
 }
 
 /**
- * Resolve a date preset string to a concrete YYYY-MM-DD date (or date pair for
- * range presets). Returns `null` for non-preset values.
+ * Calendar year/month/day (1-based month) of an instant as it appears in a
+ * timezone. Falls back to the UTC components if the timezone is invalid.
  */
-export function resolveDatePreset(preset: string): { start: string; end: string } | null {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = now.getMonth();
-  const dd = now.getDate();
+export function getDatePartsInTimezone(
+  date: Date,
+  timezone: string = 'UTC',
+): { year: number; month: number; day: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date);
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value);
+    return { year: get('year'), month: get('month'), day: get('day') };
+  } catch {
+    return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
+  }
+}
 
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+/**
+ * UTC epoch milliseconds for a wall-clock time interpreted in the given
+ * timezone. Single-pass offset correction — accurate except within the rare
+ * ~1h DST overlap, which is acceptable for day-boundary filtering.
+ */
+export function zonedTimeToUtcMs(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  ms: number,
+  timezone: string = 'UTC',
+): number {
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(utcGuess));
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value);
+    const wallAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+    return utcGuess - (wallAsUtc - utcGuess);
+  } catch {
+    return utcGuess;
+  }
+}
+
+/**
+ * Resolve a date preset string to a concrete YYYY-MM-DD date (or date pair for
+ * range presets), relative to the current date in the project `timezone`.
+ * Returns `null` for non-preset values.
+ */
+export function resolveDatePreset(
+  preset: string,
+  timezone: string = 'UTC',
+): { start: string; end: string } | null {
+  const { year: yyyy, month, day: dd } = getDatePartsInTimezone(new Date(), timezone);
+  const mm = month - 1;
+
+  // Format calendar Y/M/D as YYYY-MM-DD using UTC purely as a calendar
+  // calculator (constructed and read in UTC, so no timezone shift).
+  const fmt = (y: number, m0: number, d: number) =>
+    new Date(Date.UTC(y, m0, d)).toISOString().slice(0, 10);
 
   switch (preset) {
     case '$today':
-      return { start: fmt(new Date(yyyy, mm, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+      return { start: fmt(yyyy, mm, dd), end: fmt(yyyy, mm, dd) };
     case '$this_week': {
-      const day = now.getDay();
-      const monday = new Date(yyyy, mm, dd - ((day + 6) % 7));
-      const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
-      return { start: fmt(monday), end: fmt(sunday) };
+      const dow = new Date(Date.UTC(yyyy, mm, dd)).getUTCDay();
+      const mondayOffset = (dow + 6) % 7;
+      return { start: fmt(yyyy, mm, dd - mondayOffset), end: fmt(yyyy, mm, dd - mondayOffset + 6) };
     }
     case '$this_month':
-      return { start: fmt(new Date(yyyy, mm, 1)), end: fmt(new Date(yyyy, mm + 1, 0)) };
+      return { start: fmt(yyyy, mm, 1), end: fmt(yyyy, mm + 1, 0) };
     case '$this_year':
-      return { start: fmt(new Date(yyyy, 0, 1)), end: fmt(new Date(yyyy, 11, 31)) };
+      return { start: fmt(yyyy, 0, 1), end: fmt(yyyy, 11, 31) };
     case '$past_week':
-      return { start: fmt(new Date(yyyy, mm, dd - 7)), end: fmt(new Date(yyyy, mm, dd)) };
+      return { start: fmt(yyyy, mm, dd - 7), end: fmt(yyyy, mm, dd) };
     case '$past_month':
-      return { start: fmt(new Date(yyyy, mm - 1, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+      return { start: fmt(yyyy, mm - 1, dd), end: fmt(yyyy, mm, dd) };
     case '$past_year':
-      return { start: fmt(new Date(yyyy - 1, mm, dd)), end: fmt(new Date(yyyy, mm, dd)) };
+      return { start: fmt(yyyy - 1, mm, dd), end: fmt(yyyy, mm, dd) };
     default:
       return null;
   }
@@ -319,10 +382,11 @@ export function resolveDateFilterValue(
   operator: string,
   value: string | undefined,
   value2: string | undefined,
+  timezone: string = 'UTC',
 ): { operator: string; value: string; value2?: string } | null {
   if (!value) return null;
   if (!isDatePreset(value)) return { operator, value, value2 };
-  const range = resolveDatePreset(value);
+  const range = resolveDatePreset(value, timezone);
   if (!range) return { operator, value, value2 };
 
   switch (operator) {
@@ -338,6 +402,39 @@ export function resolveDateFilterValue(
   }
 }
 
+/**
+ * True if a single condition compares a date field against a date preset
+ * (e.g. `$today`). Such conditions resolve relative to the current date, so
+ * the static export re-evaluates them client-side instead of baking the result.
+ */
+export function isDynamicDateCondition(
+  condition: { source?: string; fieldType?: string; value?: string },
+): boolean {
+  if (condition.source !== 'collection_field') return false;
+  if (!condition.fieldType || !isDateFieldType(condition.fieldType as CollectionFieldType)) return false;
+  return isDatePreset(condition.value);
+}
+
+/**
+ * True if a ConditionalVisibility expression contains any date-preset condition.
+ * Used by the static export to detect rules that need client-side re-evaluation.
+ */
+export function hasDynamicDateRule(
+  visibility:
+    | { groups?: Array<{ conditions?: Array<{ source?: string; fieldType?: string; value?: string }> }> }
+    | undefined
+    | null,
+): boolean {
+  if (!visibility?.groups) return false;
+  for (const group of visibility.groups) {
+    if (!group.conditions) continue;
+    for (const condition of group.conditions) {
+      if (isDynamicDateCondition(condition)) return true;
+    }
+  }
+  return false;
+}
+
 /** Match `YYYY-MM-DD` (the format emitted by `<input type="date">` and date presets). */
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -347,18 +444,29 @@ export function isDateOnlyString(value: string | undefined | null): boolean {
 
 /**
  * Convert a filter date string to start/end-of-day UTC timestamps.
- * For `YYYY-MM-DD` inputs the range spans the entire UTC day so that filters
- * match datetime values (which are stored as full ISO strings) regardless of
- * the time component. For other inputs, both bounds equal the parsed
- * timestamp. Returns `null` if the input cannot be parsed.
+ *
+ * For datetime (`date`) fields, a `YYYY-MM-DD` input spans the day in the
+ * project `timezone` (converted to the matching UTC instants) so filters align
+ * with what the user sees. For `date_only` fields (`dateOnly = true`) the day
+ * spans UTC, since those values are timezone-neutral calendar dates. Other
+ * inputs collapse to a single parsed instant. Returns `null` if unparseable.
  */
 export function dateStringToDayBounds(
   value: string | undefined | null,
+  timezone: string = 'UTC',
+  dateOnly: boolean = false,
 ): { start: number; end: number } | null {
   if (!value) return null;
   if (isDateOnlyString(value)) {
-    const start = Date.parse(`${value}T00:00:00.000Z`);
-    const end = Date.parse(`${value}T23:59:59.999Z`);
+    if (dateOnly) {
+      const start = Date.parse(`${value}T00:00:00.000Z`);
+      const end = Date.parse(`${value}T23:59:59.999Z`);
+      if (isNaN(start) || isNaN(end)) return null;
+      return { start, end };
+    }
+    const [y, m, d] = value.split('-').map(Number);
+    const start = zonedTimeToUtcMs(y, m, d, 0, 0, 0, 0, timezone);
+    const end = zonedTimeToUtcMs(y, m, d, 23, 59, 59, 999, timezone);
     if (isNaN(start) || isNaN(end)) return null;
     return { start, end };
   }
@@ -368,18 +476,21 @@ export function dateStringToDayBounds(
 
 /**
  * Compare a stored date/datetime value against a filter value using day-aware
- * semantics (so `is today` matches any timestamp on today's date).
- * Returns `false` if either value cannot be parsed.
+ * semantics (so `is today` matches any timestamp on today's date). Day bounds
+ * are resolved in the project `timezone` for datetime fields; `dateOnly` fields
+ * compare in UTC. Returns `false` if either value cannot be parsed.
  */
 export function compareDateFilter(
   storedValue: string,
   operator: 'is' | 'is_before' | 'is_after' | 'is_between',
   filterValue: string,
   filterValue2?: string,
+  timezone: string = 'UTC',
+  dateOnly: boolean = false,
 ): boolean {
   const valueTs = Date.parse(storedValue);
   if (isNaN(valueTs)) return false;
-  const bounds = dateStringToDayBounds(filterValue);
+  const bounds = dateStringToDayBounds(filterValue, timezone, dateOnly);
   if (!bounds) return false;
 
   switch (operator) {
@@ -390,7 +501,7 @@ export function compareDateFilter(
     case 'is_after':
       return valueTs > bounds.end;
     case 'is_between': {
-      const bounds2 = dateStringToDayBounds(filterValue2);
+      const bounds2 = dateStringToDayBounds(filterValue2, timezone, dateOnly);
       if (!bounds2) return false;
       return valueTs >= bounds.start && valueTs <= bounds2.end;
     }
@@ -512,8 +623,88 @@ export function getItemDisplayName(
 // Field Groups Utilities
 // =============================================================================
 
-/** Source of field data: 'page' for dynamic page data, 'collection' for collection layer data */
-export type FieldSourceType = 'page' | 'collection';
+/** Source of field data: 'page' for dynamic page data, 'collection' for collection layer data, 'global' for a site-wide global variable */
+export type FieldSourceType = 'page' | 'collection' | 'global';
+
+/** Sentinel collection id assigned to global-variable pseudo-fields. */
+export const GLOBALS_COLLECTION_ID = '__globals__';
+
+/**
+ * Shape a global variable as a pseudo `CollectionField` so it can flow through
+ * the existing field-group / selector / resolution machinery. The field id is
+ * the global id (resolution keys on it via globalsData).
+ */
+export function globalToPseudoField(global: GlobalVariable): CollectionField {
+  return {
+    id: global.id,
+    name: global.name,
+    key: global.key,
+    type: global.type,
+    default: null,
+    fillable: true,
+    order: global.order,
+    collection_id: GLOBALS_COLLECTION_ID,
+    reference_collection_id: null,
+    created_at: global.created_at,
+    updated_at: global.updated_at,
+    deleted_at: null,
+    hidden: false,
+    is_computed: false,
+    data: global.data ?? {},
+    is_published: global.is_published,
+  };
+}
+
+/**
+ * Build a flat `globalId -> value` map from global variables. This map is
+ * merged into the collection/page item values consumed by field resolution so
+ * global-source bindings resolve anywhere (global ids are unique UUIDs, so they
+ * never collide with collection field ids). Shared by the builder canvas,
+ * published SSR, and build-time injection so the keying stays consistent.
+ */
+export function buildGlobalsValueMap(globals: GlobalVariable[]): Record<string, string> {
+  return Object.fromEntries(globals.map((g) => [g.id, g.value ?? '']));
+}
+
+/** Live metadata for a global variable, keyed by id (the pill's stable identifier). */
+export interface GlobalFieldMeta {
+  type: string;
+  name: string;
+}
+
+/**
+ * Build an `globalId -> { type, name }` map from global variables. Pills store
+ * only the global id; renderers use this map to resolve the *current* type and
+ * label at render time instead of trusting the snapshot baked into the pill, so
+ * a global's type/name change is reflected everywhere without re-saving layers.
+ */
+export function buildGlobalsMetaMap(globals: GlobalVariable[]): Record<string, GlobalFieldMeta> {
+  return Object.fromEntries(globals.map((g) => [g.id, { type: g.type, name: g.name }]));
+}
+
+/**
+ * Merge a globals value map into a collection/page field-data map for field
+ * resolution. Collection/page values win on collision (global ids are unique
+ * UUIDs, so collisions never actually happen) — the precedence is fixed here so
+ * the builder canvas and published SSR stay consistent.
+ *
+ * Allocation-conscious: this runs once per layer across the whole tree, so it
+ * avoids copying the globals map when it doesn't have to.
+ *  - No globals          → return the base untouched.
+ *  - No collection/page  → return the *shared* globals reference (no copy).
+ *    context (base empty)   On published pages collection values are pre-resolved
+ *                           and stripped, so this is the case for nearly every
+ *                           layer; returning the reference keeps it zero-alloc.
+ *  - Both present        → allocate a merged map (only collection-context layers).
+ */
+export function mergeGlobalsIntoFieldData(
+  base: Record<string, string> | undefined,
+  globalsData: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!globalsData || Object.keys(globalsData).length === 0) return base;
+  if (!base || Object.keys(base).length === 0) return globalsData;
+  return { ...globalsData, ...base };
+}
 
 /** A group of fields with a source, label, optional detail (e.g. collection name), and optional layer ID */
 export interface FieldGroup {
@@ -544,6 +735,8 @@ export interface BuildFieldGroupsConfig {
   collections: { id: string; name: string }[];
   /** Multi-asset collection context (when inside a multi-asset nested collection) */
   multiAssetContext?: { sourceFieldId: string; source: FieldSourceType } | null;
+  /** Site-wide global variables (always available regardless of layer context) */
+  globals?: GlobalVariable[];
 }
 
 /**
@@ -551,7 +744,7 @@ export interface BuildFieldGroupsConfig {
  * Returns groups for collection layer fields and/or page collection fields.
  */
 export function buildFieldGroups(config: BuildFieldGroupsConfig): FieldGroup[] | undefined {
-  const { parentCollectionLayers, page, fieldsByCollectionId, collections, multiAssetContext } = config;
+  const { parentCollectionLayers, page, fieldsByCollectionId, collections, multiAssetContext, globals } = config;
   const groups: FieldGroup[] = [];
   const addedCollectionIds = new Set<string>();
 
@@ -606,6 +799,18 @@ export function buildFieldGroups(config: BuildFieldGroupsConfig): FieldGroup[] |
     }
   }
 
+  // Site-wide global variables are always available, independent of layer
+  // context. Type filtering downstream (filterFieldGroupsByType) restricts
+  // which globals appear in each binding surface.
+  if (globals && globals.length > 0) {
+    groups.push({
+      fields: globals.map(globalToPseudoField),
+      label: 'Global variables',
+      detail: 'Globals',
+      source: 'global',
+    });
+  }
+
   return groups.length > 0 ? groups : undefined;
 }
 
@@ -621,8 +826,8 @@ export const ASSET_FIELD_TYPES: CollectionFieldType[] = ['image', 'audio', 'vide
 /** Field types that can be bound to color design properties */
 export const COLOR_FIELD_TYPES: CollectionFieldType[] = ['color'];
 
-/** Field types that can be bound to image layers (image fields) */
-export const IMAGE_FIELD_TYPES: CollectionFieldType[] = ['image'];
+/** Field types that can be bound to image layers (image fields, or link/url fields holding an image URL) */
+export const IMAGE_FIELD_TYPES: CollectionFieldType[] = ['image', 'link'];
 
 /** Field types that can be bound to audio layers (audio fields) */
 export const AUDIO_FIELD_TYPES: CollectionFieldType[] = ['audio'];
@@ -715,6 +920,18 @@ export function getAssetFieldTypeLabel(fieldType: CollectionFieldType): string {
 
 /** Virtual collection ID marker for multi-asset collections */
 export const MULTI_ASSET_COLLECTION_ID = '__multi_asset__';
+
+/**
+ * Whether a collection binding points to a real, selected source.
+ * Field-sourced bindings (reference/multi-asset/inverse) require a `source_field_id`,
+ * so an unbound multi-asset placeholder (virtual `id`, no field chosen yet) is not
+ * considered selected. Direct collections just require a non-empty `id`.
+ */
+export function hasBoundCollectionSource(collectionVariable?: CollectionVariable | null): boolean {
+  if (!collectionVariable) return false;
+  if (collectionVariable.source_field_type) return !!collectionVariable.source_field_id;
+  return !!collectionVariable.id;
+}
 
 /** Virtual field IDs for multi-asset collections (prefixed to avoid collision) */
 export const MULTI_ASSET_VIRTUAL_FIELDS = {
@@ -936,6 +1153,7 @@ export function buildFieldGroupsForLayer(
   page: BuildFieldGroupsConfig['page'],
   fieldsByCollectionId: Record<string, CollectionField[]>,
   collections: { id: string; name: string }[],
+  globals?: GlobalVariable[],
 ): FieldGroup[] | undefined {
   const parents = findAllParentCollectionLayers(layers, layerId);
   const parentCollection = parents[0] || null;
@@ -957,5 +1175,6 @@ export function buildFieldGroupsForLayer(
     fieldsByCollectionId,
     collections,
     multiAssetContext,
+    globals,
   });
 }

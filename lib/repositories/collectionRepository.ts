@@ -1,4 +1,6 @@
-import { getSupabaseAdmin } from '@/lib/supabase-server';
+import { getSupabaseAdmin, getTenantIdFromHeaders } from '@/lib/supabase-server';
+import { getKnexClient } from '@/lib/knex-client';
+import { SUPABASE_IN_FILTER_CHUNK_SIZE } from '@/lib/supabase-constants';
 import type { Collection, CreateCollectionData, UpdateCollectionData } from '@/types';
 import { randomUUID } from 'crypto';
 
@@ -80,6 +82,39 @@ export async function getAllCollections(filters?: QueryFilters): Promise<Collect
   });
 
   return collections;
+}
+
+/**
+ * Get raw collection rows for a publish flag in a single direct-DB (Knex) read.
+ * Unlike getAllCollections, this skips item-count joins and published-version
+ * lookups — intended for bulk publish flows that only need the base columns.
+ * @param tenantId - Optional explicit tenant scope (required inside unstable_cache)
+ */
+export async function getCollectionsRaw(isPublished: boolean, tenantId?: string): Promise<Collection[]> {
+  try {
+    const knex = await getKnexClient();
+    const resolvedTenantId = tenantId ?? await getTenantIdFromHeaders();
+    let query = knex('collections')
+      .select('*')
+      .where('is_published', isPublished)
+      .whereNull('deleted_at');
+    if (resolvedTenantId) {
+      query = query.where('tenant_id', resolvedTenantId);
+    }
+    return await query;
+  } catch {
+    const client = await getSupabaseAdmin(tenantId);
+    if (!client) throw new Error('Supabase client not configured');
+
+    const { data, error } = await client
+      .from('collections')
+      .select('*')
+      .eq('is_published', isPublished)
+      .is('deleted_at', null);
+
+    if (error) throw new Error(`Failed to fetch collections: ${error.message}`);
+    return data || [];
+  }
 }
 
 /**
@@ -313,18 +348,23 @@ export async function deleteCollection(id: string, isPublished: boolean = false)
   if (items && items.length > 0) {
     const itemIds = items.map(item => item.id);
 
-    const { error: valuesError } = await client
-      .from('collection_item_values')
-      .update({
-        deleted_at: now,
-        updated_at: now,
-      })
-      .in('item_id', itemIds)
-      .eq('is_published', isPublished)
-      .is('deleted_at', null);
+    // Chunk the id list so large `.in()` filters don't overflow the request URL
+    // length limit (which returns 400 Bad Request).
+    for (let i = 0; i < itemIds.length; i += SUPABASE_IN_FILTER_CHUNK_SIZE) {
+      const idsChunk = itemIds.slice(i, i + SUPABASE_IN_FILTER_CHUNK_SIZE);
+      const { error: valuesError } = await client
+        .from('collection_item_values')
+        .update({
+          deleted_at: now,
+          updated_at: now,
+        })
+        .in('item_id', idsChunk)
+        .eq('is_published', isPublished)
+        .is('deleted_at', null);
 
-    if (valuesError) {
-      console.error('Error soft-deleting collection item values:', valuesError);
+      if (valuesError) {
+        console.error('Error soft-deleting collection item values:', valuesError);
+      }
     }
   }
 }
