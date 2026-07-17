@@ -54,10 +54,49 @@ npm install                                 # le lock file bouge à chaque fois
 npm run type-check                          # doit être clean
 npm run lint                                # voir « Lint » plus bas
 git commit
+
+rm -rf .next                                # OBLIGATOIRE — voir ci-dessous
+npm run dev
 ```
 
 Puis les migrations (voir « Migrations Windows »), puis un tour dans l'éditeur
 avant de merger dans `main`.
+
+### ⚠️ Vider `.next` après tout gros merge
+
+**Symptôme** (constaté au merge v1.27.8) : panic Turbopack au `npm run dev`.
+
+```
+FATAL: An unexpected Turbopack error occurred. A panic log has been written to ...
+Error: Next.js inferred your workspace root, but it may not be correct.
+    We couldn't find the Next.js package (next/package.json) from the
+    project directory: C:\dev\ycode-fork\ycode\app
+```
+
+**Le message est trompeur.** Il n'y a rien à corriger dans `next.config.ts` : pas
+besoin de `turbopack.root`, ce n'est pas un problème d'inférence de racine ni
+d'installation. Node résout `next` parfaitement (`require.resolve('next/package.json')`
+depuis la racine *et* depuis `app/`). Le panic log dit la vraie cause :
+
+```
+Next.js package not found
+- Execution of AppProject::routes_with_filter failed
+- Execution of directory_tree_to_entrypoints_internal failed
+```
+
+C'est **le cache `.next` qui est périmé** : il référence une arborescence de routes
+d'avant le merge (270 fichiers déplacés/renommés). Fix :
+
+```bash
+rm -rf .next && npm run dev     # ou: npm run cache:clear
+```
+
+Vérifier avec une vraie requête, pas juste le `✓ Ready` — Turbopack compile à la
+demande et l'erreur ne survient qu'à la collecte des routes :
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3002/ycode   # attendu: 200
+```
 
 ---
 
@@ -154,6 +193,14 @@ Migrations arrivées en v1.27.8 :
 `add_is_publishable_to_pages`, `drop_layer_styles_name_unique`,
 `create_global_variables_table`, `widen_versions_entity_id`,
 `widen_collection_fields_default`.
+
+Symptôme d'une migration manquante : l'app **rend quand même** (HTTP 200) mais log
+l'erreur. Grepper le log du dev server après une requête :
+
+```
+[page-fetcher] Failed to load global variable metadata:
+  Could not find the table 'public.global_variables' in the schema cache
+```
 
 > **CSS** : si des layers sont modifiés hors éditeur (script DB), le CSS Tailwind ne
 > se régénère pas — il est généré côté client **à la sauvegarde**. Il faut re-sauver
