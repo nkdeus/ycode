@@ -312,7 +312,14 @@ export function configureBulletRenderer(el: HTMLElement, config: SwiperOptions) 
  * - Disabled nav buttons get `aria-disabled` → `disabled:` variant activates
  */
 export function syncSliderStateAttributes(swiper: InstanceType<typeof import('swiper').default>) {
+  // Swiper clears `el` when it is destroyed, and the deferred sync below runs a
+  // frame later — long enough for a slider to be torn down first by a fast
+  // unmount, a route change, or a dev-mode remount. Reading through it then
+  // throws, so every sync checks the instance is still alive.
+  const isAlive = () => Boolean(swiper.el) && !swiper.destroyed;
+
   const syncBullets = () => {
+    if (!isAlive()) return;
     const bullets = swiper.el.querySelectorAll('.swiper-pagination-bullet');
     bullets.forEach((bullet) => {
       if (bullet.classList.contains('swiper-pagination-bullet-active')) {
@@ -324,6 +331,7 @@ export function syncSliderStateAttributes(swiper: InstanceType<typeof import('sw
   };
 
   const syncNavButtons = () => {
+    if (!isAlive()) return;
     const buttons = swiper.el.querySelectorAll('[data-slider-prev], [data-slider-next]');
     buttons.forEach((btn) => {
       if (btn.classList.contains('swiper-button-disabled')) {
@@ -357,7 +365,8 @@ export function syncSliderStateAttributes(swiper: InstanceType<typeof import('sw
   swiper.on('unlock', syncNavButtons);
 
   // Initial sync after mount
-  requestAnimationFrame(syncAll);
+  const initialSyncFrame = requestAnimationFrame(syncAll);
+  swiper.on('destroy', () => cancelAnimationFrame(initialSyncFrame));
 }
 
 /** Load minimal Swiper CSS into an iframe document via <link> tag */
