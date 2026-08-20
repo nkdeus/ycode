@@ -774,23 +774,22 @@ export default async function PageRenderer({
   }
 
   // JSON-LD describing the page, derived entirely from its own SEO settings,
-  // folder position and timestamps. Skipped in preview — structured data is
-  // for crawlers, and previews aren't crawled.
+  // folder position and timestamps. Rendered in preview too: structured data is
+  // invisible on the page, so the preview is the only place to check it before
+  // going live.
   let structuredData: string | null = null;
-  if (!isPreview) {
-    try {
-      structuredData = await buildPageStructuredData({
-        page,
-        pages: pages as Page[],
-        folders: folders as PageFolder[],
-        collectionItem,
-        translations: translations as Record<string, Translation> | null,
-        lang: resolvedLang,
-        usePublishedData,
-      });
-    } catch (error) {
-      console.error('[PageRenderer] Error building structured data:', error);
-    }
+  try {
+    structuredData = await buildPageStructuredData({
+      page,
+      pages: pages as Page[],
+      folders: folders as PageFolder[],
+      collectionItem,
+      translations: translations as Record<string, Translation> | null,
+      lang: resolvedLang,
+      usePublishedData,
+    });
+  } catch (error) {
+    console.error('[PageRenderer] Error building structured data:', error);
   }
 
   return (
