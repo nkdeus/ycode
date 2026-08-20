@@ -463,6 +463,38 @@ export function containsLayerId(layer: Layer, targetId: string): boolean {
   return layer.children?.some(child => containsLayerId(child, targetId)) ?? false;
 }
 
+/** Collect every layer id in a tree into a Set (used to diff trees). */
+export function collectLayerIdSet(layers: Layer[], set: Set<string> = new Set()): Set<string> {
+  for (const layer of layers) {
+    set.add(layer.id);
+    if (layer.children) collectLayerIdSet(layer.children, set);
+  }
+  return set;
+}
+
+/**
+ * Find every newly-added layer between two versions of a tree, in document
+ * (pre-order) order — parents before children, top to bottom.
+ *
+ * Returns all ids present in `newLayers` but not `oldLayers`. The document order
+ * lets the canvas reveal a freshly-built section step by step (container first,
+ * then its contents) so it reads as if the page is being assembled live.
+ */
+export function findAddedLayerIds(oldLayers: Layer[], newLayers: Layer[]): string[] {
+  const oldIds = collectLayerIdSet(oldLayers);
+  const added: string[] = [];
+
+  const walk = (siblings: Layer[]) => {
+    for (const layer of siblings) {
+      if (!oldIds.has(layer.id)) added.push(layer.id);
+      if (layer.children) walk(layer.children);
+    }
+  };
+
+  walk(newLayers);
+  return added;
+}
+
 /**
  * Collect all element IDs from a layer tree (both settings.id and attributes.id)
  * Used for generating unique IDs for new elements
@@ -631,6 +663,54 @@ export function isTextEditable(layer: Layer): boolean {
 export function isTextContentLayer(layer: Layer | null | undefined): boolean {
   if (!layer) return false;
   return layer.name === 'heading' || layer.name === 'text';
+}
+
+/** Auto-assigned layer labels that should track the text/heading element type. */
+const AUTO_TEXT_HEADING_LABELS = new Set(['Text', 'Heading']);
+
+/**
+ * Build the props to convert a text layer into a heading (or the reverse).
+ * Switches the element `name` and its default HTML tag while preserving
+ * content, classes, and design.
+ *
+ * Only genuine block-level text and headings qualify: inline text used as
+ * button captions, alert messages, or labels (tag `span`/`label`) is excluded
+ * so conversion never emits an `<h2>` inside a `<button>` or `<p>`.
+ *
+ * An auto-assigned "Text"/"Heading" label is dropped so the layer shows its
+ * text content in the Layers panel; a user's custom layer name is preserved.
+ */
+export function getTextHeadingConversion(
+  layer: Layer | null | undefined
+): Pick<Layer, 'name' | 'settings' | 'customName'> | null {
+  if (!layer) return null;
+
+  // Drop an auto-assigned "Text"/"Heading" label so the converted layer shows
+  // its content again; keep a user-defined custom name.
+  const clearLabel = !!layer.customName && AUTO_TEXT_HEADING_LABELS.has(layer.customName);
+
+  // Heading (incl. legacy text with an h1-h6 tag) → paragraph text.
+  if (isHeadingLayer(layer)) {
+    return {
+      name: 'text',
+      settings: { ...layer.settings, tag: 'p' },
+      ...(clearLabel ? { customName: undefined } : {}),
+    };
+  }
+
+  // Block-level paragraph text → heading (skip inline span/label variants).
+  if (layer.name === 'text') {
+    const tag = layer.settings?.tag;
+    if (!tag || tag === 'p') {
+      return {
+        name: 'heading',
+        settings: { ...layer.settings, tag: 'h2' },
+        ...(clearLabel ? { customName: undefined } : {}),
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1145,6 +1225,9 @@ function layerLabelFallback(layer: Layer): string {
   return layer.customName || layer.name;
 }
 
+/** Layer types rendered as iframes, where a wrapping link can't receive clicks. */
+export const LINK_UNSUPPORTED_LAYER_NAMES = new Set(['htmlEmbed', 'map']);
+
 /**
  * Check if a layer can have a link added
  * @param layer - The layer to check
@@ -1156,8 +1239,18 @@ export function canLayerHaveLink(
   layer: Layer,
   allLayers: Layer[],
   type: 'layer' | 'richText' = 'layer'
-): { canHaveLinks: boolean; issue?: { type: 'self' | 'ancestor' | 'child' | 'richText'; layerName?: string } } {
+): { canHaveLinks: boolean; issue?: { type: 'self' | 'ancestor' | 'child' | 'richText' | 'unsupported'; layerName?: string } } {
   if (type === 'layer') {
+    // Iframe-based layers (Code embed, Map) capture pointer events, so a
+    // wrapping <a> never receives the click — a layer-level link would
+    // silently do nothing. Block it rather than offer a broken affordance.
+    if (LINK_UNSUPPORTED_LAYER_NAMES.has(layer.name)) {
+      return {
+        canHaveLinks: false,
+        issue: { type: 'unsupported' }
+      };
+    }
+
     // Checking if a layer-level link can be added
     // Can't add layer link if the layer has rich text links
     if (hasRichTextLinks(layer)) {
@@ -2791,8 +2884,11 @@ export function replaceLayerWithComponentInstance(
 ): Layer[] {
   return layers.map((layer) => {
     if (layer.id === layerId) {
+      // Drop the original customName so the instance shows the component's
+      // name instead of the layer's previous rename.
+      const { customName: _customName, ...rest } = layer;
       return {
-        ...layer,
+        ...rest,
         componentId,
         children: [],
       };

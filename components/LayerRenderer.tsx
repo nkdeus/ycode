@@ -14,6 +14,7 @@ import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextEd
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
+import { getSliderPresizeVars } from '@/lib/slider-utils';
 import { useCanvasSlider } from '@/hooks/use-canvas-slider';
 import { resolveFieldFromSources } from '@/lib/cms-variables-utils';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getAssetId, getStaticTextContent, createAssetVariable, createDynamicTextVariable, resolveDesignStyles } from '@/lib/variable-utils';
@@ -2245,6 +2246,14 @@ const LayerItemImpl: React.FC<{
       if (layer.name === 'slider' && layer.settings?.slider) {
         elementProps['data-slider-id'] = layer.id;
         elementProps['data-slider-settings'] = JSON.stringify(layer.settings.slider);
+        // Pre-size slides before Swiper JS runs (prevents a 1-slide flash) only
+        // for numeric multi-view sliders; per-view 1 keeps its own slide widths.
+        const presizeVars = getSliderPresizeVars(layer.settings.slider);
+        if (presizeVars) {
+          elementProps['data-slider-presize'] = '';
+          const existingStyle = (typeof elementProps.style === 'object' && elementProps.style) || {};
+          elementProps.style = { ...existingStyle, ...presizeVars };
+        }
       }
       if (SWIPER_DATA_ATTR_MAP[layer.name]) {
         elementProps[SWIPER_DATA_ATTR_MAP[layer.name]] = '';
@@ -2271,8 +2280,12 @@ const LayerItemImpl: React.FC<{
       }
     }
 
-    // Hide elements with hiddenGenerated: true by default (in all modes)
-    if (layer.hiddenGenerated) {
+    // Hide elements with hiddenGenerated: true by default (in all modes).
+    // Scoped to alerts only: the flag is meant for form success/error alerts
+    // (toggled here for the builder preview). Non-alert layers (e.g. animated
+    // dropdowns) manage visibility via data-gsap-hidden and must not be pinned
+    // to display:none here.
+    if (layer.hiddenGenerated && layer.alertType) {
       const existingStyle = typeof elementProps.style === 'object' ? elementProps.style : {};
       elementProps.style = { ...existingStyle, display: 'none' };
     }
@@ -2509,10 +2522,11 @@ const LayerItemImpl: React.FC<{
 
       const isLcpCandidate = !!lcpCandidateLayerId && layer.id === lcpCandidateLayerId;
       const imgLoadingAttr = layer.attributes?.loading as string | undefined;
-      // LCP candidate always loads eagerly with high fetchpriority — overrides
-      // the image template's default `loading="lazy"`. Other images keep
-      // whatever the user/template set (defaults to lazy).
-      const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
+      // LCP candidate always loads eagerly with high fetchpriority. Every other
+      // image falls back to `lazy` when no explicit value is set: React 19
+      // auto-emits `<link rel="preload" as="image">` for any non-lazy <img>, so
+      // an unset attribute would wastefully preload below-the-fold images.
+      const effectiveLoading = isLcpCandidate ? 'eager' : (imgLoadingAttr ?? 'lazy');
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, 80);
 
@@ -2864,7 +2878,7 @@ const LayerItemImpl: React.FC<{
           data-layer-id={layer.id}
           data-layer-type="htmlEmbed"
           data-html-embed="true"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
           className={fullClassName}
           style={{
             width: '100%',
@@ -2955,8 +2969,9 @@ const LayerItemImpl: React.FC<{
           const domain = privacyMode ? 'youtube-nocookie.com' : 'youtube.com';
 
           // Build YouTube embed URL with parameters
+          // Never autoplay on the canvas to avoid distracting playback while editing
           const params: string[] = [];
-          if (normalizedAttributes?.autoplay === true) params.push('autoplay=1');
+          if (!isEditMode && normalizedAttributes?.autoplay === true) params.push('autoplay=1');
           if (normalizedAttributes?.muted === true) params.push('mute=1');
           if (normalizedAttributes?.loop === true) params.push(`loop=1&playlist=${videoId}`);
           if (normalizedAttributes?.controls !== true) params.push('controls=0');
@@ -2986,26 +3001,36 @@ const LayerItemImpl: React.FC<{
             applyCustomAttributes(iframeProps, layer.settings.customAttributes);
           }
 
-          // Only add editor event handlers in edit mode (client-side only)
+          // On the canvas, the cross-origin iframe swallows clicks (so the layer
+          // can't be selected) and lets the user start playback. Wrap it in a
+          // selectable container and disable iframe interaction, mirroring the
+          // native media and map handling.
           if (isEditMode && !isEditing) {
-            const originalOnClick = elementProps.onClick as ((e: React.MouseEvent) => void) | undefined;
-            iframeProps.onClick = (e: React.MouseEvent) => {
-              if (isLockedByOther) {
-                e.stopPropagation();
-                e.preventDefault();
-                return;
-              }
-              if (e.button !== 2) {
-                e.stopPropagation();
-                onLayerClick?.(layer.id, e);
-              }
-              if (originalOnClick) {
-                originalOnClick(e);
-              }
-            };
-            iframeProps.onContextMenu = (e: React.MouseEvent) => {
-              e.stopPropagation();
-            };
+            const mediaOnlyKeys = [
+              'controls', 'loop', 'muted', 'preload', 'autoplay', 'volume',
+              'playsInline', 'poster', 'src', 'youtubePrivacyMode',
+              'controlsList', 'crossOrigin', 'disablePictureInPicture', 'disableRemotePlayback',
+            ];
+            const wrapperProps: Record<string, any> = { ...elementProps };
+            mediaOnlyKeys.forEach((key) => delete wrapperProps[key]);
+            // Positioning context so the absolutely-positioned iframe fills the
+            // wrapper's (aspect-ratio) box exactly, with no gaps.
+            wrapperProps.className = `${wrapperProps.className || ''} relative`.trim();
+
+            return (
+              <div {...wrapperProps}>
+                <iframe
+                  key={`youtube-${layer.id}-${videoId}`}
+                  src={embedUrl}
+                  title="YouTube video"
+                  className="absolute inset-0 block h-full w-full pointer-events-none"
+                  style={{ border: 'none' }}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  suppressHydrationWarning
+                />
+              </div>
+            );
           }
 
           return (
@@ -3114,7 +3139,8 @@ const LayerItemImpl: React.FC<{
       // React treats autoPlay as a DOM property, not an HTML attribute,
       // so it won't survive SSR or hydration. Remove from props and
       // apply via ref to avoid both the warning and the rendering issue.
-      const shouldAutoPlay = mediaProps.autoplay === true;
+      // Never autoplay on the canvas to avoid distracting playback while editing.
+      const shouldAutoPlay = !isEditMode && mediaProps.autoplay === true;
       delete mediaProps.autoplay;
 
       // React doesn't reliably reflect `muted` to the DOM during SSR/hydration,
@@ -3136,45 +3162,8 @@ const LayerItemImpl: React.FC<{
         mediaProps.poster = posterUrl;
       }
 
-      // Handle special attributes that need to be set on the DOM element
-      // (autoplay, muted, and volume must be set via JavaScript on the DOM element)
-      if (htmlTag === 'audio' || htmlTag === 'video') {
-        const originalRef = mediaProps.ref;
-        const volumeValue = normalizedAttributes?.volume
-          ? parseInt(normalizedAttributes.volume) / 100
-          : undefined;
-
-        if (shouldAutoPlay || shouldMute || volumeValue !== undefined) {
-          mediaProps.ref = (element: HTMLAudioElement | HTMLVideoElement | null) => {
-            if (originalRef) {
-              if (typeof originalRef === 'function') {
-                originalRef(element);
-              } else {
-                (originalRef as React.MutableRefObject<HTMLAudioElement | HTMLVideoElement | null>).current = element;
-              }
-            }
-
-            if (element) {
-              // Mute before play() so mobile browsers allow autoplay.
-              if (shouldMute) {
-                element.muted = true;
-                element.setAttribute('muted', '');
-              }
-              if (shouldAutoPlay) {
-                element.autoplay = true;
-                element.setAttribute('autoplay', '');
-                element.play().catch(() => {});
-              }
-              if (volumeValue !== undefined) {
-                element.volume = volumeValue;
-              }
-            }
-          };
-        }
-      }
-
-      return (
-        <Tag {...mediaProps}>
+      const mediaChildren = (
+        <>
           {textContent && textContent}
           {effectiveChildren && effectiveChildren.length > 0 && (
             <LayerRenderer
@@ -3220,6 +3209,96 @@ const LayerItemImpl: React.FC<{
               lcpCandidateLayerId={lcpCandidateLayerId}
             />
           )}
+        </>
+      );
+
+      // On the canvas, <audio> is entirely native controls that swallow clicks,
+      // so the layer can't be selected and clicking starts playback. Wrap it in
+      // a selectable container and make the element non-interactive. <video> is
+      // handled below without a wrapper so it keeps its exact published sizing.
+      if (isEditMode && htmlTag === 'audio') {
+        // Media-only attributes belong on the element, not the wrapper div.
+        const mediaOnlyKeys = [
+          'controls', 'loop', 'muted', 'preload', 'autoplay', 'volume',
+          'playsInline', 'poster', 'src', 'youtubePrivacyMode',
+          'controlsList', 'crossOrigin', 'disablePictureInPicture', 'disableRemotePlayback',
+        ];
+        const wrapperProps: Record<string, any> = { ...mediaProps };
+        mediaOnlyKeys.forEach((key) => delete wrapperProps[key]);
+        // <audio> has no intrinsic height/width classes. Keep the wrapper
+        // block-level (so stacked players don't sit side by side) but shrink it
+        // to the player's natural width instead of stretching full width.
+        wrapperProps.className = `${wrapperProps.className || ''} w-fit max-w-full`.trim();
+
+        const mediaElementProps: Record<string, any> = { ...normalizedAttributes };
+        delete mediaElementProps.autoplay;
+        delete mediaElementProps.volume;
+        delete mediaElementProps.youtubePrivacyMode;
+        if (mediaSrc) mediaElementProps.src = mediaSrc;
+        mediaElementProps.className = 'pointer-events-none';
+        mediaElementProps.tabIndex = -1;
+        mediaElementProps.suppressHydrationWarning = true;
+
+        return (
+          <div {...wrapperProps}>
+            <Tag {...mediaElementProps}>
+              {mediaChildren}
+            </Tag>
+          </div>
+        );
+      }
+
+      // Block manual playback of <video> on the canvas without altering its
+      // layout: it renders exactly like the published page, but any attempt to
+      // play (clicking to select, native controls) is immediately paused.
+      if (isEditMode && htmlTag === 'video') {
+        const originalOnPlay = mediaProps.onPlay as ((e: React.SyntheticEvent<HTMLVideoElement>) => void) | undefined;
+        mediaProps.onPlay = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+          e.currentTarget.pause();
+          originalOnPlay?.(e);
+        };
+      }
+
+      // Handle special attributes that need to be set on the DOM element
+      // (autoplay, muted, and volume must be set via JavaScript on the DOM element)
+      if (htmlTag === 'audio' || htmlTag === 'video') {
+        const originalRef = mediaProps.ref;
+        const volumeValue = normalizedAttributes?.volume
+          ? parseInt(normalizedAttributes.volume) / 100
+          : undefined;
+
+        if (shouldAutoPlay || shouldMute || volumeValue !== undefined) {
+          mediaProps.ref = (element: HTMLAudioElement | HTMLVideoElement | null) => {
+            if (originalRef) {
+              if (typeof originalRef === 'function') {
+                originalRef(element);
+              } else {
+                (originalRef as React.MutableRefObject<HTMLAudioElement | HTMLVideoElement | null>).current = element;
+              }
+            }
+
+            if (element) {
+              // Mute before play() so mobile browsers allow autoplay.
+              if (shouldMute) {
+                element.muted = true;
+                element.setAttribute('muted', '');
+              }
+              if (shouldAutoPlay) {
+                element.autoplay = true;
+                element.setAttribute('autoplay', '');
+                element.play().catch(() => {});
+              }
+              if (volumeValue !== undefined) {
+                element.volume = volumeValue;
+              }
+            }
+          };
+        }
+      }
+
+      return (
+        <Tag {...mediaProps}>
+          {mediaChildren}
         </Tag>
       );
     }

@@ -18,12 +18,9 @@ import { getAllPublishedPageFolders } from '@/lib/repositories/pageFolderReposit
 import { getSlugTranslationsByLocale } from '@/lib/repositories/translationRepository';
 import { buildSvgDataUrl, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
-import { buildPageHreflangAlternates } from '@/lib/hreflang-utils';
-import { getTranslatableKey } from '@/lib/locale-runtime';
+import { buildPageHreflangAlternates, type HreflangAlternate } from '@/lib/hreflang-utils';
+import { getTranslatableKey, getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { buildAbsolutePageUrl, getSiteBaseUrl } from '@/lib/url-utils';
-
-/** Languages map shape Next.js expects under `metadata.alternates.languages`. */
-type MetadataLanguages = NonNullable<NonNullable<Metadata['alternates']>['languages']>;
 
 /**
  * Global page render settings fetched once per page render
@@ -66,6 +63,8 @@ export interface GenerateMetadataOptions {
   tenantId?: string;
   /** Primary domain URL (e.g. https://example.com) for metadataBase */
   primaryDomainUrl?: string;
+  /** Per-locale translations, keyed `{source}:{id}:{content_key}`, for localized SEO */
+  translations?: Record<string, Translation> | null;
 }
 
 /**
@@ -207,19 +206,23 @@ const fetchHreflangDataset = cache(async (): Promise<HreflangDataset> => {
 });
 
 /**
- * Build the `metadata.alternates.languages` map for a page on a multilingual
- * site. Returns null when hreflang shouldn't be emitted (single locale, no
- * absolute base URL, or no resolvable alternates).
+ * Build the hreflang alternates for a page on a multilingual site. Returns an
+ * empty array when hreflang shouldn't be emitted (single locale or no
+ * resolvable alternates). Rendered as lowercase `<link rel="alternate"
+ * hreflang>` tags (see HreflangAlternateLinks) rather than via Next's
+ * `metadata.alternates.languages`, which React 19 emits as camelCase `hrefLang`.
  */
-async function buildHreflangLanguages(
+export async function buildPageHreflangAlternatesForPage(
   page: Page,
   baseUrl: string,
-  collectionItem?: CollectionItemWithValues
-): Promise<MetadataLanguages | null> {
+  collectionItem?: CollectionItemWithValues,
+   
+  tenantId?: string
+): Promise<HreflangAlternate[]> {
   const { locales, folders, translationsByLocale } = await fetchHreflangDataset();
 
   if (locales.length <= 1) {
-    return null;
+    return [];
   }
 
   // Dynamic pages need the collection item's slug to resolve per-locale URLs.
@@ -232,7 +235,7 @@ async function buildHreflangLanguages(
     }
     : null;
 
-  const alternates = buildPageHreflangAlternates({
+  return buildPageHreflangAlternates({
     page,
     folders,
     baseUrl,
@@ -240,16 +243,6 @@ async function buildHreflangLanguages(
     translationsByLocale,
     dynamicSlug,
   });
-
-  if (alternates.length === 0) {
-    return null;
-  }
-
-  const languages: MetadataLanguages = {};
-  for (const alt of alternates) {
-    languages[alt.hreflang as keyof MetadataLanguages] = alt.href;
-  }
-  return languages;
 }
 
 /**
@@ -265,24 +258,29 @@ export async function generatePageMetadata(
   page: Page,
   options: GenerateMetadataOptions = {}
 ): Promise<Metadata> {
-  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath, primaryDomainUrl } = options;
+  const { isPreview = false, fallbackTitle, fallbackDescription, collectionItem, pagePath, primaryDomainUrl, translations } = options;
 
   const seo = page.settings?.seo;
   const isErrorPage = page.error_page !== null;
 
+  // Resolve locale-translated SEO values (falls back to originals when no
+  // completed translation exists for the current locale).
+  const seoTitle = getTranslatedText(seo?.title, 'seo:title', translations, page.id);
+  const seoDescription = getTranslatedText(seo?.description, 'seo:description', translations, page.id);
+
   // Build title - resolve field variables if collection item is available
-  let title = seo?.title || page.name || fallbackTitle || 'Page';
-  if (collectionItem && seo?.title) {
-    title = resolveInlineVariables(seo.title, collectionItem) || page.name || fallbackTitle || 'Page';
+  let title = seoTitle || page.name || fallbackTitle || 'Page';
+  if (collectionItem && seoTitle) {
+    title = resolveInlineVariables(seoTitle, collectionItem) || page.name || fallbackTitle || 'Page';
   }
   if (isPreview) {
     title = `[Preview] ${title}`;
   }
 
   // Build description - resolve field variables if collection item is available
-  let description = seo?.description || fallbackDescription || `${page.name} - Built with Ycode`;
-  if (collectionItem && seo?.description) {
-    description = resolveInlineVariables(seo.description, collectionItem) || fallbackDescription || `${page.name} - Built with Ycode`;
+  let description = seoDescription || fallbackDescription || page.name;
+  if (collectionItem && seoDescription) {
+    description = resolveInlineVariables(seoDescription, collectionItem) || fallbackDescription || page.name;
   }
 
   // Base metadata
@@ -334,23 +332,10 @@ export async function generatePageMetadata(
       };
     }
 
-    // Add hreflang alternates for multilingual sites. Skipped for error pages
-    // and noindex pages (excluded from the language cluster, mirroring the
-    // sitemap), and requires an absolute base URL to emit valid links.
-    if (siteBaseUrl && !isErrorPage && !seo?.noindex) {
-      try {
-        const languages = await buildHreflangLanguages(page, siteBaseUrl, collectionItem);
-        if (languages) {
-          metadata.alternates = {
-            ...metadata.alternates,
-            languages,
-          };
-        }
-      } catch (error) {
-        // Non-fatal: a page should still render without hreflang links.
-        console.error('Failed to generate hreflang alternates:', error);
-      }
-    }
+    // hreflang alternates are rendered as lowercase <link> tags in the page
+    // head (see HreflangAlternateLinks / PageRenderer), not via
+    // metadata.alternates.languages — React 19 emits that map's `hrefLang`
+    // prop verbatim, but the HTML/Google standard is lowercase `hreflang`.
   }
 
   // Add custom favicon and web clip (apple-touch-icon) — applies to preview too.
@@ -371,8 +356,14 @@ export async function generatePageMetadata(
 
   // Add Open Graph and Twitter Card metadata (not for error pages)
   if (!isErrorPage) {
+    // A fixed asset (string ID) can be translated per locale; CMS field
+    // variables resolve from the collection item instead.
+    const seoImage = typeof seo?.image === 'string'
+      ? getTranslatedAssetId(seo.image, 'seo:image', translations, page.id)
+      : seo?.image;
+
     // Resolve image URL (handles both Asset ID string and FieldVariable)
-    let imageUrl = seo?.image ? await resolveImageUrl(seo.image, collectionItem) : null;
+    let imageUrl = seoImage ? await resolveImageUrl(seoImage, collectionItem) : null;
 
     // Make relative URLs absolute — social crawlers require absolute og:image URLs
     if (imageUrl && imageUrl.startsWith('/') && siteBaseUrl) {

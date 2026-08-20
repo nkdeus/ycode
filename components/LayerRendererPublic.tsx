@@ -20,6 +20,7 @@ import { getLayerHtmlTag, getClassesString, getText, resolveFieldValue, isTextCo
 import { getMapIframeProps, DEFAULT_MAP_SETTINGS, resolveMarkerColor } from '@/lib/map-utils';
 import { HTML_TO_REACT_ATTRS } from '@/lib/parse-head-html';
 import { SWIPER_CLASS_MAP, SWIPER_DATA_ATTR_MAP } from '@/lib/slider-constants';
+import { getSliderPresizeVars } from '@/lib/slider-utils';
 import { getDynamicTextContent, getImageUrlFromVariable, getVideoUrlFromVariable, getIframeUrlFromVariable, isFieldVariable, isAssetVariable, isStaticTextVariable, isDynamicTextVariable, getStaticTextContent, getAssetId, resolveDesignStyles } from '@/lib/variable-utils';
 import { getTranslatedAssetId, getTranslatedText } from '@/lib/locale-runtime';
 import { isValidLinkSettings, generateLinkHref, resolveLinkAttrs, isLinkAtCollectionBoundary, isLinkToCurrentPage, type LinkResolutionContext } from '@/lib/link-utils';
@@ -1109,6 +1110,14 @@ const LayerItem: React.FC<{
       if (layer.name === 'slider' && layer.settings?.slider) {
         elementProps['data-slider-id'] = layer.id;
         elementProps['data-slider-settings'] = JSON.stringify(layer.settings.slider);
+        // Pre-size slides before Swiper JS runs (prevents a 1-slide flash) only
+        // for numeric multi-view sliders; per-view 1 keeps its own slide widths.
+        const presizeVars = getSliderPresizeVars(layer.settings.slider);
+        if (presizeVars) {
+          elementProps['data-slider-presize'] = '';
+          const existingStyle = (typeof elementProps.style === 'object' && elementProps.style) || {};
+          elementProps.style = { ...existingStyle, ...presizeVars };
+        }
       }
       if (SWIPER_DATA_ATTR_MAP[layer.name]) {
         elementProps[SWIPER_DATA_ATTR_MAP[layer.name]] = '';
@@ -1135,8 +1144,12 @@ const LayerItem: React.FC<{
       }
     }
 
-    // Hide elements with hiddenGenerated: true by default (in all modes)
-    if (layer.hiddenGenerated) {
+    // Hide elements with hiddenGenerated: true by default (in all modes).
+    // Scoped to alerts only: the flag is meant for form success/error alerts,
+    // whose reveal path clears inline display. Non-alert layers (e.g. animated
+    // dropdowns) manage visibility via data-gsap-hidden and must not be pinned
+    // to display:none here.
+    if (layer.hiddenGenerated && layer.alertType) {
       const existingStyle = typeof elementProps.style === 'object' ? elementProps.style : {};
       elementProps.style = { ...existingStyle, display: 'none' };
     }
@@ -1240,10 +1253,11 @@ const LayerItem: React.FC<{
 
       const isLcpCandidate = !!lcpCandidateLayerId && layer.id === lcpCandidateLayerId;
       const imgLoadingAttr = layer.attributes?.loading as string | undefined;
-      // LCP candidate always loads eagerly with high fetchpriority — overrides
-      // the image template's default `loading="lazy"`. Other images keep
-      // whatever the user/template set.
-      const effectiveLoading = isLcpCandidate ? 'eager' : imgLoadingAttr;
+      // LCP candidate always loads eagerly with high fetchpriority. Every other
+      // image falls back to `lazy` when no explicit value is set: React 19
+      // auto-emits `<link rel="preload" as="image">` for any non-lazy <img>, so
+      // an unset attribute would wastefully preload below-the-fold images.
+      const effectiveLoading = isLcpCandidate ? 'eager' : (imgLoadingAttr ?? 'lazy');
 
       const optimizedSrc = getOptimizedImageUrl(finalImageUrl, 1920, DEFAULT_IMAGE_QUALITY);
 
@@ -1599,7 +1613,7 @@ const LayerItem: React.FC<{
           data-layer-id={layer.id}
           data-layer-type="htmlEmbed"
           data-html-embed="true"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"
           className={fullClassName}
           style={{
             width: '100%',

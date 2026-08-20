@@ -1443,14 +1443,12 @@ async function injectCollectionData(
   // Lightbox CMS field binding — resolve filesField to concrete asset IDs/URLs
   const lightboxSettings = layer.settings?.lightbox;
   if (lightboxSettings?.filesSource === 'cms' && lightboxSettings.filesField && isFieldVariable(lightboxSettings.filesField)) {
-    const resolvedValue = resolveFieldValueWithRelationships(lightboxSettings.filesField, enhancedValues, layerDataMap);
+    // Multi-image fields resolve to an array (or JSON-encoded array); single-image
+    // fields resolve to a plain asset ID/URL, optionally comma-separated.
+    const resolvedValue = resolveFieldValueWithRelationships(lightboxSettings.filesField, enhancedValues, layerDataMap) as string | string[] | undefined;
     if (resolvedValue) {
-      // The value can be a single asset ID, a comma-separated list, or a JSON array
-      let resolvedFiles: string[];
-      try {
-        const parsed = JSON.parse(resolvedValue);
-        resolvedFiles = Array.isArray(parsed) ? parsed : [resolvedValue];
-      } catch {
+      let resolvedFiles = parseMultiAssetFieldValue(resolvedValue);
+      if (resolvedFiles.length === 0 && typeof resolvedValue === 'string') {
         resolvedFiles = resolvedValue.includes(',')
           ? resolvedValue.split(',').map(s => s.trim()).filter(Boolean)
           : [resolvedValue];
@@ -4228,9 +4226,10 @@ function resolveLayerAssets(
     }
   }
 
-  // Resolve richTextImage src URLs inside Tiptap content
+  // Resolve richTextImage src URLs inside Tiptap content. The value is read
+  // from persisted layer JSON, so guard against a primitive before probing it.
   const textVar = layer.variables?.text;
-  if (textVar && 'type' in textVar && textVar.type === 'dynamic_rich_text') {
+  if (textVar && typeof textVar === 'object' && 'type' in textVar && textVar.type === 'dynamic_rich_text') {
     const resolvedContent = resolveRichTextImageAssets((textVar as any).data?.content, assetMap);
     if (resolvedContent !== (textVar as any).data?.content) {
       variableUpdates.text = {
@@ -4788,8 +4787,11 @@ export function layerToHtml(
     attrs.push(`id="${escapeHtml(layer.attributes.id)}"`);
   }
 
-  // Hide elements marked as hiddenGenerated (e.g. alerts, slider fraction placeholder)
-  if (layer.hiddenGenerated) {
+  // Hide elements marked as hiddenGenerated. Scoped to alerts only: the flag is
+  // meant for form success/error alerts, whose reveal path clears inline display.
+  // Non-alert layers (e.g. animated dropdowns) manage visibility via
+  // data-gsap-hidden and must not be pinned to display:none here.
+  if (layer.hiddenGenerated && layer.alertType) {
     const existingDynamic = layer._dynamicStyles || {};
     layer = { ...layer, _dynamicStyles: { ...existingDynamic, display: 'none' } };
   }
@@ -5072,7 +5074,7 @@ export function layerToHtml(
 
     attrs.push('data-html-embed="true"');
     attrs.push(`srcdoc="${escapedIframeContent}"`);
-    attrs.push('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"');
+    attrs.push('sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals"');
     attrs.push('style="width: 100%; border: none; display: block;"');
     attrs.push(`title="Code Embed ${layer.id}"`);
 

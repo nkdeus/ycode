@@ -247,6 +247,11 @@ function normalizeGridSpanValue(value: string): string {
   return value.replace(/^span\s+/i, '').trim();
 }
 
+/** Tailwind `display` utility values the editor supports as bare classes. */
+const DISPLAY_VALUES = new Set([
+  'block', 'inline-block', 'inline', 'flex', 'inline-flex', 'grid', 'inline-grid', 'hidden',
+]);
+
 /**
  * Map of Tailwind class prefixes to their property names
  * Used for conflict detection and removal
@@ -309,6 +314,7 @@ const CLASS_PROPERTY_MAP: Record<string, RegExp> = {
   letterSpacing: /^tracking-(tighter|tight|normal|wide|wider|widest|\[.+\]|.+)$/,
   textAlign: /^text-(left|center|right|justify|start|end)$/,
   textWrap: /^text-(wrap|nowrap|balance|pretty)$/,
+  fontVariantNumeric: /^(normal-nums|ordinal|slashed-zero|lining-nums|oldstyle-nums|proportional-nums|tabular-nums|diagonal-fractions|stacked-fractions)$/,
   textTransform: /^(uppercase|lowercase|capitalize|normal-case)$/,
   textDecoration: /^(underline|overline|line-through|no-underline)$/,
   textDecorationColor: /^decoration-\[.+\](\/\d+)?$/,
@@ -695,8 +701,12 @@ export function propertyToClass(
   // Layout conversions
   if (category === 'layout') {
     switch (property) {
-      case 'display':
-        return value.toLowerCase();
+      case 'display': {
+        // Map CSS synonyms (e.g. "none") to Tailwind's canonical value and
+        // ignore unsupported values so we never emit an invalid class like "none".
+        const normalized = value.toLowerCase() === 'none' ? 'hidden' : value.toLowerCase();
+        return DISPLAY_VALUES.has(normalized) ? normalized : null;
+      }
       case 'flexDirection':
         if (value === 'row') return 'flex-row';
         if (value === 'column') return 'flex-col';
@@ -782,6 +792,10 @@ export function propertyToClass(
         return `tracking-${value}`;
       case 'textAlign':
         return `text-${value}`;
+      case 'textWrap':
+        return `text-${value}`;
+      case 'fontVariantNumeric':
+        return value === 'normal' ? 'normal-nums' : value;
       case 'textTransform':
         if (value === 'none') return 'normal-case';
         return value; // uppercase, lowercase, capitalize
@@ -890,6 +904,13 @@ export function propertyToClass(
     if (prefix) {
       // Special case: 100% → full
       if (value === '100%') return `${prefix}-full`;
+
+      // Tailwind fraction values (e.g. "1/2" → w-1/2); n/n equals 100% → full
+      const fractionMatch = value.match(/^(\d+)\/([1-9]\d*)$/);
+      if (fractionMatch) {
+        if (fractionMatch[1] === fractionMatch[2]) return `${prefix}-full`;
+        return `${prefix}-${value}`;
+      }
 
       // Use abstracted helper with allowed named values
       return formatMeasurementClass(value, prefix, ['auto', 'full', 'screen', 'min', 'max', 'fit', 'none']);
@@ -1535,6 +1556,17 @@ export function classesToDesign(classes: string | string[]): Layer['design'] {
     if (cls === 'text-center') design.typography!.textAlign = 'center';
     if (cls === 'text-right') design.typography!.textAlign = 'right';
     if (cls === 'text-justify') design.typography!.textAlign = 'justify';
+
+    // Text Wrap
+    if (cls === 'text-wrap') design.typography!.textWrap = 'wrap';
+    if (cls === 'text-nowrap') design.typography!.textWrap = 'nowrap';
+    if (cls === 'text-balance') design.typography!.textWrap = 'balance';
+    if (cls === 'text-pretty') design.typography!.textWrap = 'pretty';
+
+    // Font Variant Numeric
+    if (CLASS_PROPERTY_MAP.fontVariantNumeric.test(cls)) {
+      design.typography!.fontVariantNumeric = cls === 'normal-nums' ? 'normal' : cls;
+    }
 
     // Text Transform
     if (cls === 'uppercase') design.typography!.textTransform = 'uppercase';

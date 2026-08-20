@@ -1,6 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { applySecurityHeaders } from '@/lib/security-headers-server';
 
 /**
  * Public API routes that skip authentication.
@@ -142,8 +143,10 @@ export async function proxy(request: NextRequest) {
   const skipPreviewAuth = process.env.DISABLE_PREVIEW_AUTH === 'true'
     && pathname.startsWith('/ycode/preview');
 
-  // Protect API and preview routes with auth
-  if (!skipPreviewAuth && (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview'))) {
+  // Protect API and preview routes with auth. `/api/templates` lives outside the
+  // `/ycode` tree (public site route group) but exposes destructive builder-only
+  // operations (apply/export), so it must be gated here too.
+  if (!skipPreviewAuth && (pathname.startsWith('/ycode/api') || pathname.startsWith('/ycode/preview') || pathname.startsWith('/api/templates'))) {
     const authResponse = await verifyApiAuth(request);
     if (authResponse) {
       if (authResponse.status === 401) {
@@ -171,6 +174,7 @@ export async function proxy(request: NextRequest) {
 
     const rewriteResponse = NextResponse.rewrite(rewriteUrl);
     rewriteResponse.headers.set('x-pathname', pathname);
+    await applySecurityHeaders(rewriteResponse);
     return rewriteResponse;
   }
 
@@ -181,6 +185,11 @@ export async function proxy(request: NextRequest) {
   response.headers.set('x-pathname', pathname);
 
   // Cache-Control for public pages is configured centrally via next.config.ts headers().
+
+  // Apply configurable security headers to public pages only (not builder/API).
+  if (isPublicPage) {
+    await applySecurityHeaders(response);
+  }
 
   return response;
 }

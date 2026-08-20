@@ -23,7 +23,7 @@ import { useClipboardStore } from '@/stores/useClipboardStore';
 import { useExternalPasteStore } from '@/stores/useExternalPasteStore';
 import { isClipboardReadGranted, readExternalDesignClipboard } from '@/lib/import/clipboard-detect';
 import { useComponentsStore } from '@/stores/useComponentsStore';
-import { canHaveChildren, canPasteIntoParent, LINK_NESTING_ERROR, findLayerById, getClassesString, regenerateInteractionIds, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, removeLayerById, findParentAndIndex, insertLayerAfter, updateLayerProps, canConvertToCollection, isExcludedFromCollection, getCollectionVariable, resetBindingsOnCollectionSourceChange } from '@/lib/layer-utils';
+import { canHaveChildren, canPasteIntoParent, LINK_NESTING_ERROR, findLayerById, getClassesString, regenerateInteractionIds, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, removeLayerById, findParentAndIndex, insertLayerAfter, updateLayerProps, canConvertToCollection, isExcludedFromCollection, getCollectionVariable, getTextHeadingConversion, resetBindingsOnCollectionSourceChange } from '@/lib/layer-utils';
 import { getStyleIds } from '@/lib/layer-style-resolve';
 import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { cloneDeep } from 'lodash';
@@ -106,7 +106,7 @@ function LayerContextMenuInner({
   onLayerSelect,
   liveLayerUpdates,
   liveComponentUpdates,
-  editingComponentId = null,
+  editingComponentId: editingComponentIdProp = null,
   isComponentDialogOpen,
   setIsComponentDialogOpen,
   isLayoutDialogOpen,
@@ -138,6 +138,12 @@ function LayerContextMenuInner({
   const components = useComponentsStore((state) => state.components);
   const componentDrafts = useComponentsStore((state) => state.componentDrafts);
   const editingComponentVariantId = useEditorStore((state) => state.editingComponentVariantId);
+  // Prefer the prop (passed by the layers tree) but fall back to the editor
+  // store so the canvas context menu also knows when a component is being
+  // edited — otherwise "Create component" on the canvas resolves against the
+  // page draft and silently fails for layers inside a component.
+  const storeEditingComponentId = useEditorStore((state) => state.editingComponentId);
+  const editingComponentId = editingComponentIdProp ?? storeEditingComponentId;
   // Resolve the active variant id for the component being edited. When
   // unspecified (or pointing at a missing variant) we fall back to the first
   // variant so the editor never shows an empty tree.
@@ -767,6 +773,25 @@ function LayerContextMenuInner({
     }
   };
 
+  const handleConvertTextHeading = () => {
+    if (!layer) return;
+
+    const conversion = getTextHeadingConversion(layer);
+    if (!conversion) return;
+
+    if (isComponentContext && editingComponentId) {
+      updateComponentAndBroadcast(updateLayerProps(getComponentLayers(), layerId, conversion));
+    } else {
+      updateLayer(pageId, layerId, conversion);
+      if (liveLayerUpdates) {
+        liveLayerUpdates.broadcastLayerUpdate(layerId, conversion);
+      }
+    }
+  };
+
+  const textHeadingConversion = layer ? getTextHeadingConversion(layer) : null;
+  const showConvertTextHeading = !!textHeadingConversion && !isComponentInstance;
+
   const isCollection = !!(layer && getCollectionVariable(layer));
   const canConvert = !!(layer && canConvertToCollection(layer));
   const showConvertOption = !!(layer && !isCollection && canHaveChildren(layer) && !layer.componentId);
@@ -896,6 +921,22 @@ function LayerContextMenuInner({
           Export as HTML
           <ContextMenuShortcut><Icon name="code" className="size-3" /></ContextMenuShortcut>
         </ContextMenuItem>
+
+        {showConvertTextHeading && textHeadingConversion && (
+          <>
+            <ContextMenuSeparator />
+
+            <ContextMenuItem onClick={handleConvertTextHeading} disabled={isLocked}>
+              {textHeadingConversion.name === 'heading' ? 'Convert to heading' : 'Convert to text'}
+              <ContextMenuShortcut>
+                <Icon
+                  name={textHeadingConversion.name === 'heading' ? 'heading' : 'text'}
+                  className="size-3"
+                />
+              </ContextMenuShortcut>
+            </ContextMenuItem>
+          </>
+        )}
 
         {(showConvertOption || isCollection) && (
           <>

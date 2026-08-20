@@ -122,6 +122,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 interface RightSidebarProps {
   onLayerUpdate: (layerId: string, updates: Partial<Layer>) => void;
+  /**
+   * When true, the column chrome (width, border, background) is provided by a
+   * parent wrapper (RightPanel) and this component only renders its body.
+   */
+  embedded?: boolean;
 }
 
 /**
@@ -159,6 +164,7 @@ function extractBgVars(bg: BackgroundsDesign | undefined): BgVars | undefined {
 
 const RightSidebar = React.memo(function RightSidebar({
   onLayerUpdate,
+  embedded = false,
 }: RightSidebarProps) {
   const selectedLayerId = useEditorStore((state) => state.selectedLayerId);
 
@@ -894,9 +900,19 @@ const RightSidebar = React.memo(function RightSidebar({
 
   // Update local state when selected layer changes (for settings fields)
   const [prevSelectedLayerId, setPrevSelectedLayerId] = useState<string | null>(null);
+  // Track element name + tag so the tag selectors resync when the layer's type
+  // changes in place (e.g. converting a heading to text via the context menu),
+  // where the selection id stays the same.
+  const layerTagSignature = `${selectedLayer?.name ?? ''}:${selectedLayer?.settings?.tag ?? ''}`;
+  const [prevLayerTagSignature, setPrevLayerTagSignature] = useState<string>('');
   if (selectedLayerId !== prevSelectedLayerId) {
     setPrevSelectedLayerId(selectedLayerId);
+    setPrevLayerTagSignature(layerTagSignature);
     setCustomId(sanitizeHtmlId(selectedLayer?.settings?.id || selectedLayer?.attributes?.id || ''));
+    setContainerTag(selectedLayer?.settings?.tag || getDefaultContainerTag(selectedLayer));
+    setTextTag(selectedLayer?.settings?.tag || getDefaultTextTag(selectedLayer));
+  } else if (layerTagSignature !== prevLayerTagSignature) {
+    setPrevLayerTagSignature(layerTagSignature);
     setContainerTag(selectedLayer?.settings?.tag || getDefaultContainerTag(selectedLayer));
     setTextTag(selectedLayer?.settings?.tag || getDefaultTextTag(selectedLayer));
   }
@@ -1040,9 +1056,16 @@ const RightSidebar = React.memo(function RightSidebar({
     setTextTag(tag);
     if (selectedLayerId) {
       const currentSettings = selectedLayer?.settings || {};
-      handleLayerUpdate(selectedLayerId, {
-        settings: { ...currentSettings, tag }
-      });
+      // Normalize the element name to match the tag family so legacy headings
+      // (stored as text with an h1-h6 tag) migrate to a proper heading.
+      const name = headingTagOptions.some(opt => opt.value === tag) ? 'heading' : 'text';
+      const updates: Partial<Layer> = { name, settings: { ...currentSettings, tag } };
+      // Drop an auto-assigned "Text"/"Heading" label so the layer shows its
+      // content again (a user's custom layer name is left untouched).
+      if (selectedLayer?.customName === 'Text' || selectedLayer?.customName === 'Heading') {
+        updates.customName = undefined;
+      }
+      handleLayerUpdate(selectedLayerId, updates);
     }
   };
 
@@ -1930,7 +1953,14 @@ const RightSidebar = React.memo(function RightSidebar({
 
   if (!selectedLayerId || !selectedLayer) {
     return (
-      <div className="w-64 shrink-0 bg-background border-l flex items-center justify-center h-screen">
+      <div
+        className={cn(
+          'flex items-center justify-center',
+          embedded
+            ? 'flex-1 min-h-0'
+            : 'w-64 shrink-0 bg-background border-l h-screen',
+        )}
+      >
         <span className="text-xs text-muted-foreground">Select layer</span>
       </div>
     );
@@ -1953,12 +1983,20 @@ const RightSidebar = React.memo(function RightSidebar({
         fields={fields}
         collections={collections}
         isInsideCollectionLayer={!!parentCollectionLayer}
+        embedded={embedded}
       />
     );
   }
 
   return (
-    <div className="w-64 shrink-0 bg-background border-l flex flex-col p-4 pb-0 h-full overflow-hidden">
+    <div
+      className={cn(
+        'flex flex-col p-4 pb-0 overflow-hidden',
+        embedded
+          ? 'flex-1 min-h-0'
+          : 'w-64 shrink-0 bg-background border-l h-full',
+      )}
+    >
       {/* Tabs.
           When the user is translating (non-default locale active) we keep the
           tab list visible but disable Design + Interactions and force the
@@ -2325,7 +2363,11 @@ const RightSidebar = React.memo(function RightSidebar({
 
               {/* Tag Selector - For heading and text layers */}
               {(selectedLayer?.name === 'heading' || (selectedLayer?.name === 'text' && !isContainerLayer(selectedLayer))) && (() => {
-                const tagOptions = selectedLayer?.name === 'heading' ? headingTagOptions : textTagOptions;
+                // Use isHeadingLayer (not name === 'heading') so legacy headings
+                // stored as text with an h1-h6 tag still get heading tag options
+                // instead of p/span/label — otherwise changing the tag demotes
+                // them to a paragraph.
+                const tagOptions = isHeadingLayer(selectedLayer) ? headingTagOptions : textTagOptions;
                 return (
                   <div className="grid grid-cols-3">
                     <Label variant="muted">Tag</Label>
