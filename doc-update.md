@@ -257,6 +257,12 @@ cher face au core upstream.
 | Lazy GSAP (`AnimationInitializer`) | ~35 l., 1 fichier | ~75 KiB unused JS | **Garder** — ratio excellent, conflit mécanique |
 | `DEFAULT_IMAGE_QUALITY` (75 vs 85 upstream) | 1 argument | images + légères | **Garder** — coût nul |
 | `computeImageSizes` (`asset-utils`) | 69 l. + 2 call sites core | 26 KiB sur le hero EasyStay | **Dette n°1** — à supprimer |
+| GEO (`lib/geo/`) | 2 fichiers propres + 3 points de contact core | llms.txt, JSON-LD et `lang` SSR générés | **Garder** — écrit comme une app, voir `docs/geo-roadmap.md` |
+
+> Les deux correctifs livrés avec le GEO (invalidation de cache sur bascule de
+> locale, `<html lang>` en SSR) sont des **bugs d'upstream**, pas des
+> spécificités du fork. À proposer en amont : une PR acceptée, c'est un conflit
+> de moins pour toujours.
 
 ### Dette n°1 : `computeImageSizes`
 
