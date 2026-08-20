@@ -3,7 +3,8 @@
 Procédure pour merger `upstream/main` sans perdre Eva CSS, et pour résoudre vite
 les conflits récurrents.
 
-Dernier merge : **v1.17.0 → v1.27.8** (334 commits, 270 fichiers, 4 conflits).
+Dernier merge : **v1.27.8 → v1.30.3** (259 commits, 3 conflits).
+Précédent : v1.17.0 → v1.27.8 (334 commits, 270 fichiers, 4 conflits).
 
 ---
 
@@ -102,6 +103,10 @@ curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3002/ycode   # attendu
 
 ## Recettes de conflits
 
+> **Merge v1.30.3 :** les 4 recettes ci-dessous se sont auto-mergées — upstream a
+> bougé ailleurs dans ces fichiers. Deux nouveaux conflits à la place, tous deux
+> triviaux (voir 5 et 6). Eva CSS : **0 conflit**, encore une fois.
+
 Les 4 conflits sont **toujours les mêmes fichiers**, et **toujours des imports**
 (sauf le n°4). La règle générale : **union des deux côtés, moins ce qui n'est plus
 utilisé**. Vérifier systématiquement avec un grep des usages réels avant de trancher.
@@ -163,6 +168,37 @@ plus. `detachAnimations()` fait mieux (préserve les one-shots déjà joués).
 
 ---
 
+### 5. `components/PageRenderer.tsx` — imports + fonts (merge v1.30.3)
+
+Même logique que les recettes 1-3 : **union, moins ce qui n'est plus utilisé**.
+Côté fork : `extractLatinFontPreloads`, `narrowFontsToUsedWeights`, `computeImageSizes`,
+`DEFAULT_IMAGE_QUALITY`. Côté upstream : `getCustomFontPreloads` + le type `FontPreload`.
+`buildImageSizes` n'est utilisé nulle part dans ce fichier → le laisser tomber.
+
+```ts
+import { buildCustomFontsCss, buildFontClassesCss, extractLatinFontPreloads, fetchGoogleFontsCss,
+  getCustomFontPreloads, getGoogleFontLinks, narrowFontsToUsedWeights } from '@/lib/font-utils';
+import type { FontPreload } from '@/lib/font-utils';
+import { collectLayerAssetIds, computeImageSizes, DEFAULT_IMAGE_QUALITY, findLcpCandidate,
+  generateImageSrcset, getAssetProxyUrl, getOptimizedImageUrl } from '@/lib/asset-utils';
+```
+
+Second hunk, dans le chargement des fonts — garder `fontsForLinks` (fork, narrowing) **et**
+prendre la ligne preload d'upstream :
+
+```ts
+googleFontLinkUrls = getGoogleFontLinks(fontsForLinks);
+fontPreloads = getCustomFontPreloads(fonts);
+```
+
+### 6. `package.json` — bloc dependencies
+
+Union alphabétique, sans réfléchir : `dompurify` (upstream) **et** `eva-css-for-tailwind` (fork).
+La ligne `version` s'auto-merge sur celle d'upstream.
+
+> ⚠️ Ordre des commandes : `npm install` **avant** `git add package-lock.json`. Sinon on
+> stage le lock d'upstream et la régénération part dans un commit séparé.
+
 ## Lint
 
 `npm run lint` remonte ~41 erreurs qui **n'ont rien à voir avec le merge** : elles
@@ -188,6 +224,9 @@ git checkout --theirs package-lock.json && git add package-lock.json && npm inst
 en syntaxe Unix, `server-only` importé par `lib/credentials.ts`, `.env` non chargé hors
 Next). Workaround : script temporaire `_run-migrate.js` à la racine — voir la mémoire
 Claude `feedback_update_windows.md` pour le contenu complet.
+
+Migration arrivée en v1.30.3 : `create_ai_chats_table` (historique du chat de
+l'agent IA, stocké en base au lieu du localStorage).
 
 Migrations arrivées en v1.27.8 :
 `add_is_publishable_to_pages`, `drop_layer_styles_name_unique`,
@@ -228,6 +267,10 @@ ce sont les règles 2 et 3 : du tuning PSI taillé pour EasyStay (mockups portra
 sur un seul projet.
 
 Décision (merge v1.27.8) : **conservée pour l'instant**, à réévaluer au prochain merge.
+
+Réévaluation (merge v1.30.3) : `computeImageSizes` a **reconflicté**, cette fois dans
+`PageRenderer.tsx` (recette 5). Trois merges, trois conflits sur ces lignes. La dette est
+confirmée : au prochain merge, supprimer avant de merger, pas après.
 
 Procédure de suppression, si on tranche :
 
