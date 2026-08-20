@@ -32,6 +32,7 @@ import { getTranslatableKey } from '@/lib/locale-runtime';
 import { getSlugTranslationsByLocale } from '@/lib/repositories/translationRepository';
 import { buildPageHreflangAlternatesForPage } from '@/lib/generate-page-metadata';
 import { getSiteBaseUrl } from '@/lib/url-utils';
+import { buildPageStructuredData } from '@/lib/geo/structured-data';
 import type { HreflangAlternate } from '@/lib/hreflang-utils';
 import type { Layer, BackgroundsDesign, Component, Page, CollectionItemWithValues, CollectionField, Locale, PageFolder, PasswordProtectionContext, Translation } from '@/types';
 
@@ -772,6 +773,26 @@ export default async function PageRenderer({
     }
   }
 
+  // JSON-LD describing the page, derived entirely from its own SEO settings,
+  // folder position and timestamps. Skipped in preview — structured data is
+  // for crawlers, and previews aren't crawled.
+  let structuredData: string | null = null;
+  if (!isPreview) {
+    try {
+      structuredData = await buildPageStructuredData({
+        page,
+        pages: pages as Page[],
+        folders: folders as PageFolder[],
+        collectionItem,
+        translations: translations as Record<string, Translation> | null,
+        lang: resolvedLang,
+        usePublishedData,
+      });
+    } catch (error) {
+      console.error('[PageRenderer] Error building structured data:', error);
+    }
+  }
+
   return (
     <>
       {/* Global head code fallback when layout skips it (SKIP_SETUP mode) */}
@@ -784,6 +805,14 @@ export default async function PageRenderer({
 
       {/* hreflang alternates for multilingual sites (lowercase attribute) */}
       <HreflangAlternateLinks alternates={hreflangAlternates} />
+
+      {/* Structured data — see lib/geo/structured-data.ts */}
+      {structuredData && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: structuredData }}
+        />
+      )}
 
       {/* Preload the LCP image so the browser starts the fetch from <head>
           rather than waiting until the parser reaches the <img> tag. Pairs
