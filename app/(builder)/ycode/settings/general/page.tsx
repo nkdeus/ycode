@@ -624,7 +624,7 @@ export default function GeneralSettingsPage() {
                     Contents of &ldquo;llms.txt&rdquo;
                   </FieldLabel>
                   <FieldDescription>
-                    If populated, will replace the content of the default /llms.txt file. Learn more about this file at llmstxt.org.
+                    Leave empty and /llms.txt is generated from your published pages and collections. Fill this in to replace it with your own. Learn more about this file at llmstxt.org.
                   </FieldDescription>
                   <Textarea
                     id="llms"
