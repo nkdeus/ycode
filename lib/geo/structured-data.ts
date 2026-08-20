@@ -19,6 +19,7 @@
 
 import { unstable_cache } from 'next/cache';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
+import { buildOrganizationNode, parseBusinessIdentity } from '@/lib/geo/business-identity';
 import { getTranslatedText } from '@/lib/locale-runtime';
 import { resolveInlineVariables } from '@/lib/inline-variables';
 import { resolveImageUrl } from '@/lib/resolve-cms-variables';
@@ -54,6 +55,19 @@ const getCachedSiteBaseUrl = unstable_cache(
     }
   },
   ['geo-site-base-url'],
+  { tags: ['all-pages'], revalidate: false },
+);
+
+/** Business facts the owner entered, shared by every page render. */
+const getCachedBusinessIdentity = unstable_cache(
+  async () => {
+    try {
+      return parseBusinessIdentity(await getSettingByKey('business_identity'));
+    } catch {
+      return null;
+    }
+  },
+  ['geo-business-identity'],
   { tags: ['all-pages'], revalidate: false },
 );
 
@@ -221,7 +235,18 @@ export async function buildPageStructuredData(
   const homeDescription = clean(home?.settings?.seo?.description);
   if (homeDescription) website.description = homeDescription;
 
+  const organization = buildOrganizationNode(
+    await getCachedBusinessIdentity(),
+    baseUrl,
+    siteName,
+  );
+
+  if (organization) {
+    website.publisher = { '@id': organization['@id'] };
+  }
+
   const graph: Record<string, unknown>[] = [website, webPage];
+  if (organization) graph.push(organization);
   if (breadcrumb) graph.push(breadcrumb);
 
   return JSON.stringify({ '@context': 'https://schema.org', '@graph': graph });

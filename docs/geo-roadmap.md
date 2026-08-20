@@ -18,6 +18,7 @@ reste ouvert.
 | `WebSite` | `lib/geo/structured-data.ts` | SEO de la page d'accueil + URL de base |
 | `WebPage` | idem | titre/description SEO, locale, timestamps, image sociale |
 | `BreadcrumbList` | idem | hiérarchie des dossiers |
+| `Organization` / `LocalBusiness` | `lib/geo/business-identity.ts` | réglage `business_identity` |
 | `<html lang>` **côté serveur** | `app/(site)/layout.tsx` | locale publiée par défaut |
 
 Trois principes ont guidé le découpage :
@@ -31,40 +32,30 @@ Général remplace la version générée. Le champ n'est pas devenu décoratif, 
 devenu optionnel.
 
 **Le code vit dans ses propres fichiers.** `lib/geo/` ne touche le cœur qu'en
-trois points (la route `llms.txt`, le layout du site, deux lignes dans
-`PageRenderer`). C'est la règle du fork : voir `doc-update.md`.
+quatre points (la route `llms.txt`, le layout du site, deux lignes dans
+`PageRenderer`, un champ dans les réglages). C'est la règle du fork : voir
+`doc-update.md`.
+
+### Le réglage `business_identity`
+
+Les faits d'entreprise sont saisis en JSON dans Réglages → Général, et mappés
+vers schema.org par `lib/geo/business-identity.ts`. Toutes les clés sont
+optionnelles ; les clés inconnues sont **écartées** plutôt que recopiées — cet
+objet est sérialisé dans chaque page publiée, une faute de frappe partirait en
+propriété invalide sur tout le site.
+
+Deux garde-fous : sans `name` aucun nœud n'est émis (une entité sans nom
+n'identifie personne), et un `LocalBusiness` sans adresse retombe en
+`Organization` — le type dit que l'entreprise est quelque part, l'affirmer sans
+adresse est une déclaration que les moteurs rejettent.
+
+La table `settings` n'a pas de séparation brouillon/publié : la sauvegarde prend
+effet dès la régénération des pages. Un formulaire dédié (champs séparés, choix
+du logo dans les assets) reste à faire — le champ JSON est une v1.
 
 ---
 
 ## Non généré, et pourquoi
-
-### `Organization` / `LocalBusiness` — bloqué sur des données absentes
-
-C'est le type le plus utile pour le GEO : c'est lui qui dit à un modèle *qui*
-est derrière le site, ce qu'il vend, où il opère. C'est aussi le seul qui
-demande des informations que Ycode ne stocke nulle part : raison sociale,
-adresse postale, téléphone, identifiants légaux, profils sociaux, zone
-desservie, gamme de prix.
-
-**Plan.**
-
-1. Nouvelle clé de réglage `business_identity` (JSONB, table `settings` — pas de
-   séparation brouillon/publié, donc effet immédiat à la sauvegarde).
-2. Un onglet « Entreprise » dans Réglages, en ShadCN comme le reste :
-   - type : `Organization` (défaut) | `LocalBusiness` | `ProfessionalService`
-   - nom, raison sociale, logo (asset), description
-   - adresse : rue, code postal, ville, pays
-   - contact : téléphone, e-mail
-   - identifiants : SIRET / RCS / VAT, en paires libellé-valeur
-   - `sameAs` : liste d'URL (réseaux sociaux, annuaires, app stores)
-   - `areaServed` : liste de villes ou régions
-   - `priceRange` : texte libre
-3. `buildPageStructuredData` ajoute le nœud au `@graph` sous
-   `@id = ${baseUrl}/#organization`, et `WebSite.publisher` y référence.
-4. Champs vides → clés omises. Un `LocalBusiness` sans adresse n'est pas émis du
-   tout : mieux vaut pas de nœud qu'un nœud incomplet.
-
-**Effort** : ~1 jour, dont la moitié en formulaire.
 
 ### Type de page (`Article`, `Product`, `Service`, `Event`, `Person`)
 

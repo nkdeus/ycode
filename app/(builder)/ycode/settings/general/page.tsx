@@ -45,6 +45,25 @@ import FileManagerDialog from '../../components/FileManagerDialog';
 import { toast } from 'sonner';
 import { ASSET_CATEGORIES } from '@/lib/asset-constants';
 
+/** Shape hint for the business identity field — every key is optional. */
+const BUSINESS_IDENTITY_PLACEHOLDER = JSON.stringify(
+  {
+    type: 'LocalBusiness',
+    name: 'Acme',
+    telephone: '+33100000000',
+    email: 'contact@acme.com',
+    streetAddress: '1 rue de la Paix',
+    postalCode: '69004',
+    addressLocality: 'Lyon',
+    addressCountry: 'FR',
+    areaServed: ['Lyon', 'Paris'],
+    sameAs: ['https://instagram.com/acme'],
+    priceRange: '€€',
+  },
+  null,
+  2,
+);
+
 export default function GeneralSettingsPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState('website');
@@ -62,6 +81,16 @@ export default function GeneralSettingsPage() {
   const storedLlmsTxt = getSettingByKey('llms_txt') as string | null;
   const [robotsTxt, setRobotsTxt] = useState(storedRobotsTxt || '');
   const [llmsTxt, setLlmsTxt] = useState(storedLlmsTxt || '');
+
+  // Business facts behind the site — the one entity structured data can't derive
+  const storedBusinessIdentity = getSettingByKey('business_identity');
+  const [businessIdentity, setBusinessIdentity] = useState(
+    storedBusinessIdentity
+      ? (typeof storedBusinessIdentity === 'string'
+        ? storedBusinessIdentity
+        : JSON.stringify(storedBusinessIdentity, null, 2))
+      : '',
+  );
 
   // Initialize Google Analytics, Site Verification, and Canonical URL from store
   const storedGaMeasurementId = getSettingByKey('ga_measurement_id') as string | null;
@@ -176,12 +205,13 @@ export default function GeneralSettingsPage() {
       sitemap: sitemapSettings,
       robots_txt: robotsTxt,
       llms_txt: llmsTxt,
+      business_identity: businessIdentity,
       ga_measurement_id: gaMeasurementId,
       google_site_verification: googleSiteVerification,
       global_canonical_url: globalCanonicalUrl,
     });
     setIsSaving(false);
-  }, [saveSettings, sitemapSettings, robotsTxt, llmsTxt, gaMeasurementId, googleSiteVerification, globalCanonicalUrl]);
+  }, [saveSettings, sitemapSettings, robotsTxt, llmsTxt, businessIdentity, gaMeasurementId, googleSiteVerification, globalCanonicalUrl]);
 
   // Save custom code settings
   const saveCustomCodeSettings = useCallback(async () => {
@@ -630,6 +660,21 @@ export default function GeneralSettingsPage() {
                     id="llms"
                     value={llmsTxt}
                     onChange={(e) => setLlmsTxt(e.target.value)}
+                  />
+                </Field>
+
+                <Field className="col-span-2">
+                  <FieldLabel htmlFor="business-identity">
+                    Business identity
+                  </FieldLabel>
+                  <FieldDescription>
+                    Who is behind this site. Used to publish an Organization or LocalBusiness entity in the structured data of every page — the one thing search engines and AI assistants can&apos;t work out from your content. JSON, all fields optional.
+                  </FieldDescription>
+                  <Textarea
+                    id="business-identity"
+                    value={businessIdentity}
+                    onChange={(e) => setBusinessIdentity(e.target.value)}
+                    placeholder={BUSINESS_IDENTITY_PLACEHOLDER}
                   />
                 </Field>
 
