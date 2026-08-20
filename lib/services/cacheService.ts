@@ -1021,9 +1021,17 @@ export async function buildLocaleRoutesForChanges(
   }
 
   // Any is_default flip reshuffles the entire URL structure (default-locale
-  // pages drop their prefix; non-default gain one). Bail to full invalidation.
+  // pages drop their prefix; non-default gain one) and changes the `lang`
+  // baked into every rendered page. Bail to full invalidation.
+  //
+  // `null` means "no counterpart on that side": a locale added by this publish
+  // has no old state, one removed has no new state. Both read as "not default",
+  // so replacing the default locale — deleting the old one and adding a new
+  // default in its place — still registers as a flip. Requiring both sides to
+  // be non-null missed exactly that case, and every cached page kept serving
+  // the previous `lang` indefinitely.
   const defaultFlipped = changedLocales.find(
-    (l) => l.oldIsDefault !== null && l.newIsDefault !== null && l.oldIsDefault !== l.newIsDefault,
+    (l) => (l.oldIsDefault ?? false) !== (l.newIsDefault ?? false),
   );
   if (defaultFlipped) {
     return {
