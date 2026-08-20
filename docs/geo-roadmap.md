@@ -77,7 +77,7 @@ variables de champ CMS comme le sont déjà titre et description :
 `datePublished` / `dateModified` sont déjà émis sur `WebPage` — le changement de
 type les conserve tels quels.
 
-**Effort** : ~1 jour pour `Article` et `Service`, le reste incrémental.
+**Effort** : ~1 jour pour `Article` et `Service`, le reste incrémental.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> **Ne pas passer par le code personnalisé de la page dynamique.** Les placeholders(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> `{{Champ}}` y sont résolus par `resolveCustomCodePlaceholders()`, qui rend le code(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> **inchangé** si `collectionFields` est vide — et il l'est sur le rendu des pages(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> d'items. Le JSON-LD part alors avec des `{{meta-title}}` littéraux dedans, ce qui(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> est pire que pas de balisage. Essayé le 20/08/2026, retiré le jour même. Le(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> générateur, lui, a déjà le titre, la description, l'image et les dates résolus :(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> c'est là que le type `Article` doit être émis.
 
 ### `FAQPage`
 
