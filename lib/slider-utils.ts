@@ -364,8 +364,15 @@ export function syncSliderStateAttributes(swiper: InstanceType<typeof import('sw
   swiper.on('lock', syncNavButtons);
   swiper.on('unlock', syncNavButtons);
 
-  // Initial sync after mount
+  // Initial sync after mount. Swiper is constructed synchronously, so `init`
+  // has already fired by the time this function runs — the handlers above only
+  // catch later updates, which makes this deferred pass the one that sets the
+  // starting state.
   const initialSyncFrame = requestAnimationFrame(syncAll);
+
+  // A slider can be torn down before that frame arrives — a fast unmount, a
+  // route change, or a dev-mode remount. Cancelling here stops the callback
+  // from running against an instance Swiper has already cleared.
   swiper.on('destroy', () => cancelAnimationFrame(initialSyncFrame));
 }
 

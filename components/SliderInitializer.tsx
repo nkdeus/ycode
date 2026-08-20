@@ -94,7 +94,16 @@ export default function SliderInitializer() {
     return () => {
       window.removeEventListener(ITEMS_INJECTED_EVENT, handleItemsInjected);
       resizeObserver.disconnect();
-      swiperInstancesRef.current.forEach((swiper) => swiper.destroy(true, true));
+      swiperInstancesRef.current.forEach((swiper) => {
+        // Capture the element before destroy clears it, then untag it. Without
+        // this the element keeps INITIALIZED_ATTR after its instance is gone,
+        // so the re-scan skips it as already mounted and the slider stays dead
+        // — which is exactly what a remount does in React strict mode and on
+        // fast refresh: mount, destroy, then find nothing left to initialize.
+        const el = swiper.el;
+        swiper.destroy(true, true);
+        el?.removeAttribute(INITIALIZED_ATTR);
+      });
       swiperInstancesRef.current = [];
     };
   }, []);
