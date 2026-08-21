@@ -20,6 +20,7 @@ reste ouvert.
 | `BreadcrumbList` | idem | hiérarchie des dossiers |
 | `Organization` / `LocalBusiness` | `lib/geo/business-identity.ts` | réglage `business_identity` |
 | `Article`, `Service`, `AboutPage`, `ContactPage`, `CollectionPage` | `lib/geo/schema-types.ts` | type choisi dans les réglages SEO de la page |
+| `Product`, `Event` | idem + `lib/geo/schema-bindings.ts` | type choisi + propriétés liées à un champ CMS ou saisies |
 | `<html lang>` **côté serveur** | `app/(site)/layout.tsx` | locale publiée par défaut |
 
 Trois principes ont guidé le découpage :
@@ -54,11 +55,55 @@ La table `settings` n'a pas de séparation brouillon/publié : la sauvegarde pre
 effet dès la régénération des pages. Un formulaire dédié (champs séparés, choix
 du logo dans les assets) reste à faire — le champ JSON est une v1.
 
+### Type de page
+
+Un sélecteur dans les réglages SEO de chaque page (`seo.schema_type`), `WebPage` par
+défaut. Deux familles :
+
+- **Sous-types de `WebPage`** — `AboutPage`, `ContactPage`, `CollectionPage` : ils
+  retypent le nœud de page sur place, aucun champ supplémentaire.
+- **Types d'entité** — `Article`, `Service`, `Product`, `Event` : ils décrivent le *sujet*
+  de la page et sortent en nœud distinct, relié par `mainEntity` / `mainEntityOfPage`.
+  Séparés parce que `breadcrumb` et `isPartOf` sont des propriétés de `WebPage` et
+  `headline` / `author` ne le sont pas — un nœud unique portant les deux serait invalide.
+
+`Article` reprend le titre, la description, l'image, et les dates de publication et de
+mise à jour ; `author` et `publisher` pointent sur `#organization` quand une identité
+d'entreprise est renseignée. `Service` ajoute `provider` et les zones desservies.
+
+Ce qui n'est pas dérivable reste au code personnalisé, sur **le même `@id`** : JSON-LD
+fusionne les nœuds qui partagent un identifiant. C'est ainsi que /tarifs porte son
+`hasOfferCatalog` — les prix ne vivent nulle part dans Ycode — tout en héritant du reste
+du nœud depuis le générateur.
+
+### Propriétés que la page ne possède pas
+
+`Article` et `Service` se remplissent entièrement depuis la page. `Product` et `Event`
+non : un prix et une date de début n'existent nulle part dans les réglages d'une page, et
+schema.org rejette ces types quand leurs propriétés obligatoires manquent.
+
+D'où `seo.schema_fields` : une liaison par propriété, avec deux sources — un **champ CMS**
+sur une page dynamique (une liaison couvre toute la collection), ou une **valeur littérale**
+saisie une fois pour une page isolée. C'est le mécanisme de l'image SEO, généralisé.
+
+L'éditeur n'affiche que les propriétés du type sélectionné : prix, devise et disponibilité
+pour `Product` ; début, fin et lieu pour `Event`. Les obligatoires sont marquées, et un
+avertissement explique ce qui se passe si elles restent vides.
+
+**Une propriété obligatoire non résolue supprime le nœud entier**, pas seulement la
+propriété. La granularité est l'item, pas la page : dans un catalogue, un produit sans prix
+ne publie rien pendant que ses voisins publient normalement. Un nœud incomplet coûterait à
+la page le reste de son balisage.
+
+Reste ouvert si le besoin apparaît : `aggregateRating` et `review` (il faudrait un endroit
+où stocker des avis), `eventAttendanceMode` (présentiel / en ligne), et une adresse
+structurée pour `location` plutôt qu'une ligne de texte.
+
 ---
 
 ## Non généré, et pourquoi
 
-### Type de page — fait(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)Un sélecteur dans les réglages SEO de chaque page (`seo.schema_type`), `WebPage` par(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)défaut. Deux familles :(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)- **Sous-types de `WebPage`** — `AboutPage`, `ContactPage`, `CollectionPage` : ils(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  retypent le nœud de page sur place, aucun champ supplémentaire.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)- **Types d'entité** — `Article`, `Service` : ils décrivent le *sujet* de la page et(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  sortent en nœud distinct, relié par `mainEntity` / `mainEntityOfPage`. Séparés parce(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  que `breadcrumb` et `isPartOf` sont des propriétés de `WebPage` et `headline` /(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  `author` ne le sont pas — un nœud unique portant les deux serait invalide.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)`Article` reprend le titre, la description, l'image, et les dates de publication et de(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)mise à jour ; `author` et `publisher` pointent sur `#organization` quand une identité(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)d'entreprise est renseignée. `Service` ajoute `provider` et les zones desservies.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)Ce qui n'est pas dérivable reste au code personnalisé, sur **le même `@id`** : JSON-LD(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)fusionne les nœuds qui partagent un identifiant. C'est ainsi que /tarifs porte son(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)`hasOfferCatalog` — les prix ne vivent nulle part dans Ycode — tout en héritant du reste(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)du nœud depuis le générateur.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)**Toujours absents : `Product` et `Event`.** Ils exigent prix, disponibilité, dates et(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)lieux, que Ycode ne stocke pas, et un nœud auquel il manque ses propriétés obligatoires(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)est rejeté plutôt qu'ignoré. À traiter le jour où ces données auront un endroit où vivre.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)### `FAQPage`
+### `FAQPage`
 
 Le balisage FAQ est celui qui se transforme le plus directement en réponse
 citée. Il exige que les questions et réponses balisées soient **visibles sur la

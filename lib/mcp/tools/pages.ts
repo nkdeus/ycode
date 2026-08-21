@@ -142,7 +142,12 @@ how next-item / previous-item links traverse the collection.`,
         description: z.string().optional().describe('SEO meta description. On dynamic pages, bind fields with <ycode-inline-variable> tags — not {{FieldName}}.'),
         noindex: z.boolean().optional().describe('Prevent search engines from indexing this page'),
         image_asset_id: z.string().nullable().optional().describe('OG image asset ID for social sharing'),
-        schema_type: z.enum(['WebPage', 'Article', 'Service', 'AboutPage', 'ContactPage', 'CollectionPage']).optional()
+        schema_fields: z.record(z.string(), z.union([
+          z.object({ type: z.literal('field'), field_id: z.string() }),
+          z.object({ type: z.literal('value'), value: z.string() }),
+        ])).optional()
+          .describe('Where Product and Event get their own properties, keyed by schema.org property name (price, priceCurrency, availability, startDate, endDate, location). Either { type: "field", field_id } to read a CMS field on a dynamic page, or { type: "value", value } for a fixed value. A type whose required properties are unset publishes no node at all.'),
+        schema_type: z.enum(['WebPage', 'Article', 'Service', 'Product', 'Event', 'AboutPage', 'ContactPage', 'CollectionPage']).optional()
           .describe('schema.org type published in the structured data of this page. Defaults to WebPage. Article adds publication and update dates plus the author; Service adds the provider and areas served; the rest retype the page itself.'),
       }).optional(),
       custom_code: z.object({
@@ -178,6 +183,7 @@ how next-item / previous-item links traverse the collection.`,
           ...(seo.noindex !== undefined ? { noindex: seo.noindex } : {}),
           ...(seo.image_asset_id !== undefined ? { image: seo.image_asset_id } : {}),
           ...(seo.schema_type !== undefined ? { schema_type: seo.schema_type } : {}),
+          ...(seo.schema_fields !== undefined ? { schema_fields: seo.schema_fields } : {}),
         };
       }
 

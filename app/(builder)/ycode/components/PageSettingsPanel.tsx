@@ -14,8 +14,10 @@ import {
   DEFAULT_PAGE_SCHEMA_TYPE,
   PAGE_SCHEMA_TYPE_OPTIONS,
   parsePageSchemaType,
+  propertiesForType,
   type PageSchemaType,
 } from '@/lib/geo/schema-types';
+import { parseSchemaBindings, type SchemaBindings } from '@/lib/geo/schema-bindings';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -136,6 +138,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
   const [seoImage, setSeoImage] = useState<string | FieldVariable | null>(null);
   const [seoNoindex, setSeoNoindex] = useState(false);
   const [seoSchemaType, setSeoSchemaType] = useState<PageSchemaType>(DEFAULT_PAGE_SCHEMA_TYPE);
+  const [seoSchemaFields, setSeoSchemaFields] = useState<SchemaBindings>({});
   const openFileManager = useEditorStore((state) => state.openFileManager);
   const leftSidebarWidth = useEditorStore((state) => state.leftSidebarWidth);
 
@@ -223,6 +226,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
     seoImage: string | FieldVariable | null;
     seoNoindex: boolean;
     seoSchemaType: PageSchemaType;
+    seoSchemaFields: SchemaBindings;
     customCodeHead: string;
     customCodeBody: string;
     authEnabled: boolean;
@@ -452,6 +456,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       !compareSeoImage(seoImage, initial.seoImage) ||
       seoNoindex !== initial.seoNoindex ||
       seoSchemaType !== initial.seoSchemaType ||
+      JSON.stringify(seoSchemaFields) !== JSON.stringify(initial.seoSchemaFields) ||
       customCodeHead !== initial.customCodeHead ||
       customCodeBody !== initial.customCodeBody ||
       authEnabled !== initial.authEnabled ||
@@ -470,7 +475,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
 
     return hasChanges;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, slug, pageFolderId, isIndex, seoTitle, seoDescription, seoImage, seoNoindex, seoSchemaType, customCodeHead, customCodeBody, authEnabled, authPassword, collectionId, slugFieldId, nextPrevSortBy, nextPrevSortOrder, stageForPublish, canHandleStatus, saveCounter]);
+  }, [name, slug, pageFolderId, isIndex, seoTitle, seoDescription, seoImage, seoNoindex, seoSchemaType, seoSchemaFields, customCodeHead, customCodeBody, authEnabled, authPassword, collectionId, slugFieldId, nextPrevSortBy, nextPrevSortOrder, stageForPublish, canHandleStatus, saveCounter]);
 
   // Expose method to check for unsaved changes externally
   useImperativeHandle(ref, () => ({
@@ -552,6 +557,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
           initialValuesRef.current.seoImage = settings?.seo?.image || null;
           initialValuesRef.current.seoNoindex = isPageErrorPage ? true : (settings?.seo?.noindex || false);
           initialValuesRef.current.seoSchemaType = parsePageSchemaType(settings?.seo?.schema_type);
+          initialValuesRef.current.seoSchemaFields = parseSchemaBindings(settings?.seo?.schema_fields);
           initialValuesRef.current.customCodeHead = settings?.custom_code?.head || '';
           initialValuesRef.current.customCodeBody = settings?.custom_code?.body || '';
           initialValuesRef.current.authEnabled = settings?.auth?.enabled || false;
@@ -584,6 +590,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       !compareSeoImage(seoImage, initialValuesRef.current.seoImage) ||
       seoNoindex !== initialValuesRef.current.seoNoindex ||
       seoSchemaType !== initialValuesRef.current.seoSchemaType ||
+      JSON.stringify(seoSchemaFields) !== JSON.stringify(initialValuesRef.current.seoSchemaFields) ||
       customCodeHead !== initialValuesRef.current.customCodeHead ||
       customCodeBody !== initialValuesRef.current.customCodeBody ||
       authEnabled !== initialValuesRef.current.authEnabled ||
@@ -629,6 +636,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       const initialSeoImage = settings?.seo?.image || null; // Asset ID or FieldVariable
       const initialSeoNoindex = isErrorPage ? true : (settings?.seo?.noindex || false);
       const initialSeoSchemaType = parsePageSchemaType(settings?.seo?.schema_type);
+      const initialSeoSchemaFields = parseSchemaBindings(settings?.seo?.schema_fields);
       const initialCustomCodeHead = settings?.custom_code?.head || '';
       const initialCustomCodeBody = settings?.custom_code?.body || '';
       const initialAuthEnabled = settings?.auth?.enabled || false;
@@ -651,6 +659,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoImage: initialSeoImage,
         seoNoindex: initialSeoNoindex,
         seoSchemaType: initialSeoSchemaType,
+        seoSchemaFields: initialSeoSchemaFields,
         customCodeHead: initialCustomCodeHead,
         customCodeBody: initialCustomCodeBody,
         authEnabled: initialAuthEnabled,
@@ -689,6 +698,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoImage: null,
         seoNoindex: false,
         seoSchemaType: DEFAULT_PAGE_SCHEMA_TYPE,
+        seoSchemaFields: {},
         customCodeHead: '',
         customCodeBody: '',
         authEnabled: false,
@@ -962,6 +972,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         setSeoImage(initialValuesRef.current.seoImage);
         setSeoNoindex(initialValuesRef.current.seoNoindex);
         setSeoSchemaType(initialValuesRef.current.seoSchemaType);
+        setSeoSchemaFields(initialValuesRef.current.seoSchemaFields);
         setCustomCodeHead(initialValuesRef.current.customCodeHead);
         setCustomCodeBody(initialValuesRef.current.customCodeBody);
         setAuthEnabled(initialValuesRef.current.authEnabled);
@@ -993,6 +1004,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         setSeoImage(initialValuesRef.current.seoImage);
         setSeoNoindex(initialValuesRef.current.seoNoindex);
         setSeoSchemaType(initialValuesRef.current.seoSchemaType);
+        setSeoSchemaFields(initialValuesRef.current.seoSchemaFields);
         setCustomCodeHead(initialValuesRef.current.customCodeHead);
         setCustomCodeBody(initialValuesRef.current.customCodeBody);
         setAuthEnabled(initialValuesRef.current.authEnabled);
@@ -1155,6 +1167,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
           image: isErrorPage ? null : seoImage,
           noindex: isErrorPage ? true : seoNoindex,
           schema_type: seoSchemaType,
+          schema_fields: seoSchemaFields,
         },
         custom_code: {
           head: customCodeHead.trim(),
@@ -1231,6 +1244,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoImage: normalizedSeoImage,
         seoNoindex: normalizedSeoNoindex,
         seoSchemaType: seoSchemaType,
+        seoSchemaFields: seoSchemaFields,
         customCodeHead: trimmedCustomCodeHead,
         customCodeBody: trimmedCustomCodeBody,
         authEnabled,
@@ -1894,6 +1908,65 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
                             {PAGE_SCHEMA_TYPE_OPTIONS.find((o) => o.value === seoSchemaType)?.hint}
                           </FieldDescription>
                         </Field>
+
+                        {propertiesForType(seoSchemaType).map((spec) => {
+                          const binding = seoSchemaFields[spec.key];
+                          const boundFieldId = binding?.type === 'field' ? binding.field_id : '';
+                          const literal = binding?.type === 'value' ? binding.value : '';
+                          const activeCollectionId = collectionId || currentPage?.settings?.cms?.collection_id || '';
+                          const bindableFields = isDynamicPage ? (fields[activeCollectionId] || []) : [];
+
+                          return (
+                            <Field key={spec.key}>
+                              <FieldLabel htmlFor={`schema-${spec.key}`}>
+                                {spec.label}
+                                {spec.required && <span className="text-destructive"> *</span>}
+                              </FieldLabel>
+                              <FieldDescription>{spec.hint}</FieldDescription>
+
+                              {isDynamicPage && bindableFields.length > 0 ? (
+                                <Select
+                                  value={boundFieldId || undefined}
+                                  onValueChange={(fieldId) => setSeoSchemaFields({
+                                    ...seoSchemaFields,
+                                    [spec.key]: { type: 'field', field_id: fieldId },
+                                  })}
+                                >
+                                  <SelectTrigger id={`schema-${spec.key}`}>
+                                    <SelectValue placeholder="Choose a field" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectGroup>
+                                      {bindableFields.map((field) => (
+                                        <SelectItem
+                                          key={field.id}
+                                          value={field.id}
+                                        >
+                                          {field.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <Input
+                                  id={`schema-${spec.key}`}
+                                  value={literal}
+                                  onChange={(e) => setSeoSchemaFields({
+                                    ...seoSchemaFields,
+                                    [spec.key]: { type: 'value', value: e.target.value },
+                                  })}
+                                />
+                              )}
+                            </Field>
+                          );
+                        })}
+
+                        {propertiesForType(seoSchemaType).some((spec) => spec.required && !seoSchemaFields[spec.key]) && (
+                          <FieldDescription className="text-destructive">
+                            Fill the required fields above, or this page publishes without its {seoSchemaType} markup — search engines reject an incomplete one rather than reading past the gap.
+                          </FieldDescription>
+                        )}
 
                         <Field orientation="horizontal" className="flex flex-row-reverse!">
                           <FieldContent>

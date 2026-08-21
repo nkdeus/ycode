@@ -788,6 +788,12 @@ export interface PageSettings {
      * owner's rather than inferred.
      */
     schema_type?: string;
+    /**
+     * Where the selected type's own properties come from — a CMS field or a
+     * literal value, keyed by schema.org property. Only Product and Event use
+     * this; see `lib/geo/schema-bindings.ts`.
+     */
+    schema_fields?: Record<string, unknown>;
   };
   custom_code?: {
     head: string;

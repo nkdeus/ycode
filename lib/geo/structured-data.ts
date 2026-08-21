@@ -6,21 +6,21 @@
  * one page at a time. Sites therefore went live declaring no entities, and a
  * language model reading them had to infer what the page even was.
  *
- * What is emitted here is strictly derived from data the site already holds —
- * SEO title and description, folder hierarchy, locale, timestamps, social
- * image. Nothing is guessed. Schema types that would require asserting facts
- * Ycode doesn't store (Organization, LocalBusiness, Product, FAQPage) are
- * deliberately left out: structured data that contradicts the page is worse
- * than none, and search engines penalise it.
+ * Nothing here is guessed. Most of what is emitted is derived from data the
+ * page already holds — SEO title and description, folder hierarchy, locale,
+ * timestamps, social image. The rest is asserted by the owner: the business
+ * identity in settings, the page's schema type, and the bindings that say
+ * where a price or a start date lives. Structured data that contradicts the
+ * page is worse than none, and search engines penalise it.
  *
- * See docs/geo-roadmap.md for the entity types that need a settings panel
- * before they can be generated.
+ * See docs/geo-roadmap.md for what is still missing and why.
  */
 
 import { unstable_cache } from 'next/cache';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { buildOrganizationNode, parseBusinessIdentity } from '@/lib/geo/business-identity';
-import { buildEntityNode, isWebPageSubtype, parsePageSchemaType } from '@/lib/geo/schema-types';
+import { buildEntityNode, isWebPageSubtype, parsePageSchemaType, propertiesForType } from '@/lib/geo/schema-types';
+import { parseSchemaBindings, resolveProperties } from '@/lib/geo/schema-bindings';
 import { getTranslatedText } from '@/lib/locale-runtime';
 import { resolveInlineVariables } from '@/lib/inline-variables';
 import { resolveImageUrl } from '@/lib/resolve-cms-variables';
@@ -263,6 +263,11 @@ export async function buildPageStructuredData(
       modified,
       organizationId: organization ? String(organization['@id']) : null,
       areaServed: identity?.areaServed,
+      properties: resolveProperties(
+        propertiesForType(schemaType),
+        parseSchemaBindings(page.settings?.seo?.schema_fields),
+        input.collectionItem,
+      ),
     });
 
   if (entity) {
