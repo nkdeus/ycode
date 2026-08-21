@@ -781,6 +781,13 @@ export interface PageSettings {
     title: string;
     description: string;
     noindex: boolean; // Prevent search engines from indexing the page
+    /**
+     * schema.org type published in the page's structured data. Defaults to
+     * `WebPage` when unset. Validated against the known list on read — see
+     * `lib/geo/schema-types.ts`, which also documents why the choice is the
+     * owner's rather than inferred.
+     */
+    schema_type?: string;
   };
   custom_code?: {
     head: string;

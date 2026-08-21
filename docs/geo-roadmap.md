@@ -19,6 +19,7 @@ reste ouvert.
 | `WebPage` | idem | titre/description SEO, locale, timestamps, image sociale |
 | `BreadcrumbList` | idem | hiérarchie des dossiers |
 | `Organization` / `LocalBusiness` | `lib/geo/business-identity.ts` | réglage `business_identity` |
+| `Article`, `Service`, `AboutPage`, `ContactPage`, `CollectionPage` | `lib/geo/schema-types.ts` | type choisi dans les réglages SEO de la page |
 | `<html lang>` **côté serveur** | `app/(site)/layout.tsx` | locale publiée par défaut |
 
 Trois principes ont guidé le découpage :
@@ -57,29 +58,7 @@ du logo dans les assets) reste à faire — le champ JSON est une v1.
 
 ## Non généré, et pourquoi
 
-### Type de page (`Article`, `Product`, `Service`, `Event`, `Person`)
-
-Aujourd'hui tout sort en `WebPage`. Un guide de 1 100 mots mériterait
-`Article`, une page tarifs `Service` avec des `Offer`. Mais rien dans le modèle
-de données ne dit ce qu'*est* une page — le deviner depuis le contenu produirait
-des faux positifs, et un `Article` posé sur une page produit dessert le site.
-
-**Plan.** Un select dans les réglages SEO de la page (`page.settings.seo.schema_type`),
-`WebPage` par défaut. Pour les pages dynamiques, le type vaut pour tous les items
-de la collection. Chaque type débloque ses champs propres, remplis depuis des
-variables de champ CMS comme le sont déjà titre et description :
-
-- `Article` → `author`, `datePublished`, `dateModified`, `image`, `articleSection`
-- `Service` → `provider` (→ `#organization`), `areaServed`, `hasOfferCatalog`
-- `Product` → `offers`, `brand`, `aggregateRating`
-- `Event` → `startDate`, `location`, `offers`
-
-`datePublished` / `dateModified` sont déjà émis sur `WebPage` — le changement de
-type les conserve tels quels.
-
-**Effort** : ~1 jour pour `Article` et `Service`, le reste incrémental.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> **Ne pas passer par le code personnalisé de la page dynamique.** Les placeholders(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> `{{Champ}}` y sont résolus par `resolveCustomCodePlaceholders()`, qui rend le code(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> **inchangé** si `collectionFields` est vide — et il l'est sur le rendu des pages(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> d'items. Le JSON-LD part alors avec des `{{meta-title}}` littéraux dedans, ce qui(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> est pire que pas de balisage. Essayé le 20/08/2026, retiré le jour même. Le(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> générateur, lui, a déjà le titre, la description, l'image et les dates résolus :(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)> c'est là que le type `Article` doit être émis.
-
-### `FAQPage`
+### Type de page — fait(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)Un sélecteur dans les réglages SEO de chaque page (`seo.schema_type`), `WebPage` par(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)défaut. Deux familles :(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)- **Sous-types de `WebPage`** — `AboutPage`, `ContactPage`, `CollectionPage` : ils(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  retypent le nœud de page sur place, aucun champ supplémentaire.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)- **Types d'entité** — `Article`, `Service` : ils décrivent le *sujet* de la page et(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  sortent en nœud distinct, relié par `mainEntity` / `mainEntityOfPage`. Séparés parce(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  que `breadcrumb` et `isPartOf` sont des propriétés de `WebPage` et `headline` /(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)  `author` ne le sont pas — un nœud unique portant les deux serait invalide.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)`Article` reprend le titre, la description, l'image, et les dates de publication et de(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)mise à jour ; `author` et `publisher` pointent sur `#organization` quand une identité(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)d'entreprise est renseignée. `Service` ajoute `provider` et les zones desservies.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)Ce qui n'est pas dérivable reste au code personnalisé, sur **le même `@id`** : JSON-LD(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)fusionne les nœuds qui partagent un identifiant. C'est ainsi que /tarifs porte son(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)`hasOfferCatalog` — les prix ne vivent nulle part dans Ycode — tout en héritant du reste(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)du nœud depuis le générateur.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)**Toujours absents : `Product` et `Event`.** Ils exigent prix, disponibilité, dates et(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)lieux, que Ycode ne stocke pas, et un nœud auquel il manque ses propriétés obligatoires(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)est rejeté plutôt qu'ignoré. À traiter le jour où ces données auront un endroit où vivre.(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)(t) => (crlf ? t.replace(/\n/g, '\r\n') : t)### `FAQPage`
 
 Le balisage FAQ est celui qui se transforme le plus directement en réponse
 citée. Il exige que les questions et réponses balisées soient **visibles sur la

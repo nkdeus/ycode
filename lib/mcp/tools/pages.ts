@@ -125,7 +125,8 @@ DRAFT STATUS: Set is_publishable to false to keep the page as a draft that is sk
     'update_page_settings',
     `Update page SEO, custom code, password protection, or CMS binding (dynamic pages).
 
-SEO: Set title, description, noindex, and OG image (asset ID). On dynamic pages, bind CMS
+SEO: Set title, description, noindex, OG image (asset ID), and the schema.org type published
+in the page's structured data. On dynamic pages, bind CMS
 fields in title/description with <ycode-inline-variable> tags (same format as set_dynamic_text).
 Custom code: Inject HTML into <head> or before </body>. On dynamic pages, bind CMS fields
 with {{FieldName}} placeholders (exact collection field names) — NOT <ycode-inline-variable>.
@@ -141,6 +142,8 @@ how next-item / previous-item links traverse the collection.`,
         description: z.string().optional().describe('SEO meta description. On dynamic pages, bind fields with <ycode-inline-variable> tags — not {{FieldName}}.'),
         noindex: z.boolean().optional().describe('Prevent search engines from indexing this page'),
         image_asset_id: z.string().nullable().optional().describe('OG image asset ID for social sharing'),
+        schema_type: z.enum(['WebPage', 'Article', 'Service', 'AboutPage', 'ContactPage', 'CollectionPage']).optional()
+          .describe('schema.org type published in the structured data of this page. Defaults to WebPage. Article adds publication and update dates plus the author; Service adds the provider and areas served; the rest retype the page itself.'),
       }).optional(),
       custom_code: z.object({
         head: z.string().optional().describe('HTML to inject into <head> (analytics, JSON-LD, meta tags). On dynamic pages use {{FieldName}} for CMS values — never <ycode-inline-variable>.'),
@@ -174,6 +177,7 @@ how next-item / previous-item links traverse the collection.`,
           ...(seo.description !== undefined ? { description: seo.description } : {}),
           ...(seo.noindex !== undefined ? { noindex: seo.noindex } : {}),
           ...(seo.image_asset_id !== undefined ? { image: seo.image_asset_id } : {}),
+          ...(seo.schema_type !== undefined ? { schema_type: seo.schema_type } : {}),
         };
       }
 

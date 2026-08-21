@@ -10,6 +10,12 @@ import React, { useState, useEffect, useMemo, useRef, useImperativeHandle, useCa
 import Image from 'next/image';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
 import type { Page, PageSettings, Asset, FieldVariable, CollectionField } from '@/types';
+import {
+  DEFAULT_PAGE_SCHEMA_TYPE,
+  PAGE_SCHEMA_TYPE_OPTIONS,
+  parsePageSchemaType,
+  type PageSchemaType,
+} from '@/lib/geo/schema-types';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -129,6 +135,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
   const [seoDescription, setSeoDescription] = useState('');
   const [seoImage, setSeoImage] = useState<string | FieldVariable | null>(null);
   const [seoNoindex, setSeoNoindex] = useState(false);
+  const [seoSchemaType, setSeoSchemaType] = useState<PageSchemaType>(DEFAULT_PAGE_SCHEMA_TYPE);
   const openFileManager = useEditorStore((state) => state.openFileManager);
   const leftSidebarWidth = useEditorStore((state) => state.leftSidebarWidth);
 
@@ -215,6 +222,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
     seoDescription: string;
     seoImage: string | FieldVariable | null;
     seoNoindex: boolean;
+    seoSchemaType: PageSchemaType;
     customCodeHead: string;
     customCodeBody: string;
     authEnabled: boolean;
@@ -443,6 +451,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       seoDescription !== initial.seoDescription ||
       !compareSeoImage(seoImage, initial.seoImage) ||
       seoNoindex !== initial.seoNoindex ||
+      seoSchemaType !== initial.seoSchemaType ||
       customCodeHead !== initial.customCodeHead ||
       customCodeBody !== initial.customCodeBody ||
       authEnabled !== initial.authEnabled ||
@@ -461,7 +470,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
 
     return hasChanges;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [name, slug, pageFolderId, isIndex, seoTitle, seoDescription, seoImage, seoNoindex, customCodeHead, customCodeBody, authEnabled, authPassword, collectionId, slugFieldId, nextPrevSortBy, nextPrevSortOrder, stageForPublish, canHandleStatus, saveCounter]);
+  }, [name, slug, pageFolderId, isIndex, seoTitle, seoDescription, seoImage, seoNoindex, seoSchemaType, customCodeHead, customCodeBody, authEnabled, authPassword, collectionId, slugFieldId, nextPrevSortBy, nextPrevSortOrder, stageForPublish, canHandleStatus, saveCounter]);
 
   // Expose method to check for unsaved changes externally
   useImperativeHandle(ref, () => ({
@@ -542,6 +551,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
           initialValuesRef.current.seoDescription = settings?.seo?.description || '';
           initialValuesRef.current.seoImage = settings?.seo?.image || null;
           initialValuesRef.current.seoNoindex = isPageErrorPage ? true : (settings?.seo?.noindex || false);
+          initialValuesRef.current.seoSchemaType = parsePageSchemaType(settings?.seo?.schema_type);
           initialValuesRef.current.customCodeHead = settings?.custom_code?.head || '';
           initialValuesRef.current.customCodeBody = settings?.custom_code?.body || '';
           initialValuesRef.current.authEnabled = settings?.auth?.enabled || false;
@@ -573,6 +583,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       seoDescription !== initialValuesRef.current.seoDescription ||
       !compareSeoImage(seoImage, initialValuesRef.current.seoImage) ||
       seoNoindex !== initialValuesRef.current.seoNoindex ||
+      seoSchemaType !== initialValuesRef.current.seoSchemaType ||
       customCodeHead !== initialValuesRef.current.customCodeHead ||
       customCodeBody !== initialValuesRef.current.customCodeBody ||
       authEnabled !== initialValuesRef.current.authEnabled ||
@@ -617,6 +628,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
       const initialSeoDescription = settings?.seo?.description || '';
       const initialSeoImage = settings?.seo?.image || null; // Asset ID or FieldVariable
       const initialSeoNoindex = isErrorPage ? true : (settings?.seo?.noindex || false);
+      const initialSeoSchemaType = parsePageSchemaType(settings?.seo?.schema_type);
       const initialCustomCodeHead = settings?.custom_code?.head || '';
       const initialCustomCodeBody = settings?.custom_code?.body || '';
       const initialAuthEnabled = settings?.auth?.enabled || false;
@@ -638,6 +650,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoDescription: initialSeoDescription,
         seoImage: initialSeoImage,
         seoNoindex: initialSeoNoindex,
+        seoSchemaType: initialSeoSchemaType,
         customCodeHead: initialCustomCodeHead,
         customCodeBody: initialCustomCodeBody,
         authEnabled: initialAuthEnabled,
@@ -675,6 +688,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoDescription: '',
         seoImage: null,
         seoNoindex: false,
+        seoSchemaType: DEFAULT_PAGE_SCHEMA_TYPE,
         customCodeHead: '',
         customCodeBody: '',
         authEnabled: false,
@@ -947,6 +961,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         setSeoDescription(initialValuesRef.current.seoDescription);
         setSeoImage(initialValuesRef.current.seoImage);
         setSeoNoindex(initialValuesRef.current.seoNoindex);
+        setSeoSchemaType(initialValuesRef.current.seoSchemaType);
         setCustomCodeHead(initialValuesRef.current.customCodeHead);
         setCustomCodeBody(initialValuesRef.current.customCodeBody);
         setAuthEnabled(initialValuesRef.current.authEnabled);
@@ -977,6 +992,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         setSeoDescription(initialValuesRef.current.seoDescription);
         setSeoImage(initialValuesRef.current.seoImage);
         setSeoNoindex(initialValuesRef.current.seoNoindex);
+        setSeoSchemaType(initialValuesRef.current.seoSchemaType);
         setCustomCodeHead(initialValuesRef.current.customCodeHead);
         setCustomCodeBody(initialValuesRef.current.customCodeBody);
         setAuthEnabled(initialValuesRef.current.authEnabled);
@@ -1138,6 +1154,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
           description: seoDescription.trim(),
           image: isErrorPage ? null : seoImage,
           noindex: isErrorPage ? true : seoNoindex,
+          schema_type: seoSchemaType,
         },
         custom_code: {
           head: customCodeHead.trim(),
@@ -1213,6 +1230,7 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
         seoDescription: trimmedSeoDescription,
         seoImage: normalizedSeoImage,
         seoNoindex: normalizedSeoNoindex,
+        seoSchemaType: seoSchemaType,
         customCodeHead: trimmedCustomCodeHead,
         customCodeBody: trimmedCustomCodeBody,
         authEnabled,
@@ -1843,6 +1861,38 @@ const PageSettingsPanel = React.forwardRef<PageSettingsPanelHandle, PageSettings
                               })()}
                             </div>
                           </div>
+                        </Field>
+
+                        <Field>
+                          <FieldLabel htmlFor="schema-type">
+                            Page type
+                          </FieldLabel>
+                          <FieldDescription>
+                            Tells search engines and AI assistants what this page is. Published in the page&apos;s structured data and filled in from your existing content.
+                          </FieldDescription>
+                          <Select
+                            value={seoSchemaType}
+                            onValueChange={(value) => setSeoSchemaType(parsePageSchemaType(value))}
+                          >
+                            <SelectTrigger id="schema-type">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                {PAGE_SCHEMA_TYPE_OPTIONS.map((option) => (
+                                  <SelectItem
+                                    key={option.value}
+                                    value={option.value}
+                                  >
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
+                          <FieldDescription>
+                            {PAGE_SCHEMA_TYPE_OPTIONS.find((o) => o.value === seoSchemaType)?.hint}
+                          </FieldDescription>
                         </Field>
 
                         <Field orientation="horizontal" className="flex flex-row-reverse!">

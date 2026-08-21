@@ -20,6 +20,7 @@
 import { unstable_cache } from 'next/cache';
 import { getSettingByKey } from '@/lib/repositories/settingsRepository';
 import { buildOrganizationNode, parseBusinessIdentity } from '@/lib/geo/business-identity';
+import { buildEntityNode, isWebPageSubtype, parsePageSchemaType } from '@/lib/geo/schema-types';
 import { getTranslatedText } from '@/lib/locale-runtime';
 import { resolveInlineVariables } from '@/lib/inline-variables';
 import { resolveImageUrl } from '@/lib/resolve-cms-variables';
@@ -208,9 +209,15 @@ export async function buildPageStructuredData(
 
   const breadcrumb = buildBreadcrumb(input, home, baseUrl, pageUrl, title);
 
+  // The owner's answer to "what is this page?". A WebPage subtype retypes the
+  // page node itself; anything else describes the page's subject and becomes a
+  // second node linked to it.
+  const schemaType = parsePageSchemaType(page.settings?.seo?.schema_type);
+  const webPageId = `${pageUrl}#webpage`;
+
   const webPage: Record<string, unknown> = {
-    '@type': 'WebPage',
-    '@id': `${pageUrl}#webpage`,
+    '@type': isWebPageSubtype(schemaType) ? schemaType : 'WebPage',
+    '@id': webPageId,
     url: pageUrl,
     name: title,
     isPartOf: { '@id': websiteId },
@@ -235,17 +242,35 @@ export async function buildPageStructuredData(
   const homeDescription = clean(home?.settings?.seo?.description);
   if (homeDescription) website.description = homeDescription;
 
-  const organization = buildOrganizationNode(
-    await getCachedBusinessIdentity(),
-    baseUrl,
-    siteName,
-  );
+  const identity = await getCachedBusinessIdentity();
+  const organization = buildOrganizationNode(identity, baseUrl, siteName);
 
   if (organization) {
     website.publisher = { '@id': organization['@id'] };
   }
 
+  const entity = isWebPageSubtype(schemaType)
+    ? null
+    : buildEntityNode({
+      type: schemaType,
+      pageUrl,
+      webPageId,
+      title,
+      description,
+      imageUrl,
+      lang: input.lang,
+      published,
+      modified,
+      organizationId: organization ? String(organization['@id']) : null,
+      areaServed: identity?.areaServed,
+    });
+
+  if (entity) {
+    webPage.mainEntity = { '@id': entity['@id'] };
+  }
+
   const graph: Record<string, unknown>[] = [website, webPage];
+  if (entity) graph.push(entity);
   if (organization) graph.push(organization);
   if (breadcrumb) graph.push(breadcrumb);
 
