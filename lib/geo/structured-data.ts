@@ -223,14 +223,6 @@ export async function buildPageStructuredData(
     isPartOf: { '@id': websiteId },
   };
 
-  webPage._debug = JSON.stringify({
-    raw: page.settings?.seo?.schema_type ?? null,
-    resolved: schemaType,
-    dyn: page.is_dynamic,
-    pid: page.id.slice(0, 8),
-    seoKeys: Object.keys(page.settings?.seo || {}).join('|'),
-  });
-
   if (description) webPage.description = description;
   if (input.lang) webPage.inLanguage = input.lang;
   if (published) webPage.datePublished = published;
